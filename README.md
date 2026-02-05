@@ -21,8 +21,8 @@ Production-grade VoIP calling system for ABC Real Estate using Twilio Media Stre
                                │
               ┌────────────────┼────────────────┐
               ▼                ▼                ▼
-         SQLite DB        MongoDB          Twilio
-        (SQL Data)     (Transcripts)      (VoIP)
+         SQLite DB/PostgreSQL        MongoDB          Twilio
+        (SQL Data)                (Transcripts)      (VoIP)
 ```
 
 ## 🚀 Quick Start

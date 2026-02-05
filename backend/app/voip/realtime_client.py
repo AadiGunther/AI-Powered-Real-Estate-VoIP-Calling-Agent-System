@@ -23,16 +23,15 @@ from app.voip.prompts import REAL_ESTATE_ASSISTANT_PROMPT
 
 logger = get_logger("voip.realtime_client")
 
-# ---------------- TUNING CONSTANTS ----------------
 PING_INTERVAL = 20
 PING_TIMEOUT = 10
 
-MIN_SPEECH_FRAMES = 3          # ~60–90 ms
-SILENCE_COMMIT_DELAY = 0.6     # seconds
-NOISE_LEARN_FRAMES = 50        # initial calibration frames
-NOISE_MULTIPLIER = 2.5         # speech must exceed noise floor
-ABSOLUTE_MIN_RMS = 120         # safety lower bound
-# -------------------------------------------------
+MIN_SPEECH_FRAMES = 10
+SILENCE_COMMIT_DELAY = 0.8
+NOISE_LEARN_FRAMES = 40
+NOISE_MULTIPLIER = 3.0
+ABSOLUTE_MIN_RMS = 150
+NOISE_ADAPTATION_RATE = 0.01
 
 
 class RealtimeClient:
@@ -44,26 +43,20 @@ class RealtimeClient:
 
         self.send_audio_callback: Optional[Callable[[str], None]] = None
 
-        # Turn / speech state
         self.assistant_speaking = False
         self.last_audio_rx_ts = 0.0
         self.buffer_committed = True
         self.speech_frame_count = 0
 
-        # Adaptive noise model
         self.noise_floor = 0.0
         self.noise_samples = 0
 
-        # Audio resampling state
         self._resample_up = None
         self._resample_down = None
 
-        # Memory
         self.transcript: list[dict] = []
         self.rag = RAGService()
 
-    # -------------------------------------------------
-    # CONNECTION
     # -------------------------------------------------
     async def connect(self):
         headers = {}
@@ -103,8 +96,6 @@ class RealtimeClient:
         logger.info("realtime_connected", call_sid=self.call_sid)
 
     # -------------------------------------------------
-    # SESSION
-    # -------------------------------------------------
     async def update_session(self, instructions: str):
         await self.socket.send(json.dumps({
             "type": "session.update",
@@ -124,8 +115,6 @@ class RealtimeClient:
         }))
 
     # -------------------------------------------------
-    # GREETING
-    # -------------------------------------------------
     async def send_assistant_message(self, text: str):
         await self.socket.send(json.dumps({
             "type": "conversation.item.create",
@@ -135,14 +124,11 @@ class RealtimeClient:
                 "content": [{"type": "output_text", "text": text}],
             },
         }))
-
         await self.socket.send(json.dumps({
             "type": "response.create",
             "response": {"modalities": ["audio"]},
         }))
 
-    # -------------------------------------------------
-    # AUDIO INPUT
     # -------------------------------------------------
     async def send_audio(self, audio_b64: str):
         if not self.is_connected or self.assistant_speaking:
@@ -152,7 +138,6 @@ class RealtimeClient:
         pcm8k = audioop.ulaw2lin(ulaw, 2)
         rms = audioop.rms(pcm8k, 2)
 
-        # --- Learn background noise first ---
         if self.noise_samples < NOISE_LEARN_FRAMES:
             self.noise_floor = (
                 (self.noise_floor * self.noise_samples) + rms
@@ -160,19 +145,17 @@ class RealtimeClient:
             self.noise_samples += 1
             return
 
-        speech_threshold = max(
-            self.noise_floor * NOISE_MULTIPLIER,
-            ABSOLUTE_MIN_RMS
-        )
+        threshold = max(self.noise_floor * NOISE_MULTIPLIER, ABSOLUTE_MIN_RMS)
 
-        # --- Silence / noise ---
-        if rms < speech_threshold:
+        if rms < threshold:
+            # Slowly adapt the noise floor downward or slightly upward if it's pure noise
+            self.noise_floor = (
+                (self.noise_floor * (1 - NOISE_ADAPTATION_RATE)) + (rms * NOISE_ADAPTATION_RATE)
+            )
             self.speech_frame_count = 0
             return
 
-        # --- Speech detected ---
         self.speech_frame_count += 1
-
         if self.speech_frame_count < MIN_SPEECH_FRAMES:
             return
 
@@ -188,8 +171,6 @@ class RealtimeClient:
             "audio": base64.b64encode(pcm24k).decode(),
         }))
 
-    # -------------------------------------------------
-    # SILENCE WATCHER
     # -------------------------------------------------
     async def _silence_watcher(self):
         while self.is_connected:
@@ -209,18 +190,22 @@ class RealtimeClient:
                 self.speech_frame_count = 0
 
     # -------------------------------------------------
-    # RECEIVE LOOP
-    # -------------------------------------------------
     async def _receive_loop(self):
-        async for msg in self.socket:
-            await self._handle_event(json.loads(msg))
+        try:
+            async for msg in self.socket:
+                try:
+                    await self._handle_event(json.loads(msg))
+                except Exception as e:
+                    logger.exception("event_handling_error", error=str(e))
+        except Exception as e:
+            if self.is_connected:
+                logger.exception("receive_loop_fatal_error", error=str(e))
 
     async def _handle_event(self, data: dict):
         etype = data.get("type")
 
         if etype == "response.created":
             self.assistant_speaking = True
-            self.speech_frame_count = 0
 
         elif etype == "response.audio.delta":
             pcm24k = base64.b64decode(data["delta"])
@@ -232,7 +217,20 @@ class RealtimeClient:
             if self.send_audio_callback:
                 await self.send_audio_callback(base64.b64encode(ulaw).decode())
 
-        elif etype in ("response.done", "response.audio.done"):
+        elif etype == "response.done":
+            self.assistant_speaking = False
+            # Capture assistant transcript
+            response = data.get("response", {})
+            for item in response.get("output", []):
+                if item.get("type") == "message" and item.get("role") == "assistant":
+                    content = item.get("content", [])
+                    for part in content:
+                        if part.get("type") == "audio":
+                            transcript = part.get("transcript")
+                            if transcript:
+                                self.transcript.append({"role": "assistant", "content": transcript})
+
+        elif etype == "response.audio.done":
             self.assistant_speaking = False
 
         elif etype == "conversation.item.input_audio_transcription.completed":
@@ -244,21 +242,15 @@ class RealtimeClient:
 
             context = await self.rag.retrieve(user_text)
 
-            prompt = f"""
-{REAL_ESTATE_ASSISTANT_PROMPT}
-
-Context:
-{context}
-
-User: {user_text}
-"""
-
             await self.socket.send(json.dumps({
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
                     "role": "system",
-                    "content": [{"type": "text", "text": prompt}],
+                    "content": [{
+                        "type": "text",
+                        "text": f"{REAL_ESTATE_ASSISTANT_PROMPT}\n\nContext:\n{context}\n\nUser: {user_text}"
+                    }],
                 },
             }))
 
@@ -268,19 +260,23 @@ User: {user_text}
             }))
 
     # -------------------------------------------------
-    # HELPERS
-    # -------------------------------------------------
     def set_on_audio_delta(self, cb: Callable[[str], None]):
         self.send_audio_callback = cb
+
+    def get_transcript(self) -> Optional[str]:
+        """Get formatted transcript from the conversation."""
+        if not self.transcript:
+            return None
+        
+        formatted = []
+        for msg in self.transcript:
+            role = msg.get("role", "unknown").upper()
+            content = msg.get("content", "")
+            formatted.append(f"{role}: {content}")
+        
+        return "\n".join(formatted)
 
     async def close(self):
         self.is_connected = False
         if self.socket:
             await self.socket.close()
-
-    def get_transcript(self) -> str:
-        return "\n".join(
-            f"{m['role']}: {m['content']}"
-            for m in self.transcript
-            if m.get("content")
-        )

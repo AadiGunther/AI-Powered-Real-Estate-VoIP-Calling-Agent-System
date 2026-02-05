@@ -27,10 +27,11 @@ class Settings(BaseSettings):
     twilio_application_sid: str
 
     # ---------------- OPENAI (fallback / reports) ----------------
-    azure_openai_endpoint: str
-    azure_openai_api_key: str
-    azure_openai_deployment: str
-    azure_openai_api_version: str
+    openai_api_key: str = ""  # Optional fallback
+    azure_openai_endpoint: str = ""
+    azure_openai_api_key: str = ""
+    azure_openai_deployment: str = ""
+    azure_openai_api_version: str = ""
 
     # ---------------- AZURE REALTIME (voice agent) ----------------
     azure_realtime_openai_api_key: str

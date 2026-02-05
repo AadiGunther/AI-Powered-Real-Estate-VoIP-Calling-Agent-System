@@ -9,6 +9,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import lifespan_db
+from app.utils.logging import setup_logging
+
+# Setup logging
+setup_logging(debug=settings.debug)
 
 # Import routers
 from app.api.auth import router as auth_router

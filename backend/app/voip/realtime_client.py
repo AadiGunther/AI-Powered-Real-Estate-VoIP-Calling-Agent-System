@@ -36,20 +36,11 @@ class RealtimeClient:
         self.is_connected = False
 
         self.send_audio_callback: Optional[Callable[[str], None]] = None
+        self.send_json_callback: Optional[Callable[[dict], None]] = None
 
         self.assistant_speaking = False
-        self.buffer_committed = True
-        self.last_audio_rx_ts = 0.0
-
-        self.speech_frame_count = 0
-        self.barge_frames = 0
-
-        self.noise_floor = 0.0
-        self.noise_samples = 0
-
-        self._resample_up = None
-        self._resample_down = None
-
+        self.last_assistant_item: Optional[str] = None
+        
         self.transcript = []
         self.rag = RAGService()
 
@@ -76,44 +67,49 @@ class RealtimeClient:
 
         self.is_connected = True
         asyncio.create_task(self._receive_loop())
-        asyncio.create_task(self._silence_watcher())
 
         logger.info("realtime_connected", call_sid=self.call_sid)
 
     # -------------------------
     async def update_session(self, instructions: str):
+        # Azure-specific session update matching reference logic where possible
         await self.socket.send(json.dumps({
             "type": "session.update",
             "session": {
-                "modalities": ["audio"],
+                "modalities": ["text", "audio"],
                 "instructions": instructions,
                 "voice": "alloy",
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "interruptible": True,
+                "input_audio_format": "g711_ulaw",  # Direct from Twilio
+                "output_audio_format": "g711_ulaw", # Direct for Twilio
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.65,
-                    "silence_duration_ms": 1100,
-                    "create_response": True,
+                    "threshold": 0.6,
+                    "silence_duration_ms": 1000,
+                    "create_response": False, # Manual trigger after RAG
                 },
                 "input_audio_transcription": {"model": "whisper-1"},
             },
         }))
 
     # -------------------------
-    async def send_assistant_message(self, text: str):
+    async def send_initial_greeting(self, greeting_text: str):
+        """Send the initial greeting as if it were a user instruction to the AI."""
         await self.socket.send(json.dumps({
             "type": "conversation.item.create",
             "item": {
                 "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": text}],
-            },
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": f"Greet the user with: '{greeting_text}'. Then wait for them to respond."
+                    }
+                ]
+            }
         }))
         await self.socket.send(json.dumps({
             "type": "response.create",
-            "response": {"modalities": ["audio"]},
+            "response": {"modalities": ["text", "audio"]},
         }))
 
     # -------------------------
@@ -121,80 +117,22 @@ class RealtimeClient:
         if not self.is_connected:
             return
 
-        ulaw = base64.b64decode(audio_b64)
-        pcm8k = audioop.ulaw2lin(ulaw, 2)
-        rms = audioop.rms(pcm8k, 2)
-
-        # -------------------------
-        # AI speaking → barge-in only
-        # -------------------------
+        # Half-duplex turn taking: ignore user while AI speaks
         if self.assistant_speaking:
-            threshold = max(self.noise_floor * NOISE_MULTIPLIER, ABSOLUTE_MIN_RMS)
-            if rms > threshold * BARGE_IN_MULTIPLIER:
-                self.barge_frames += 1
-            else:
-                self.barge_frames = 0
-
-            if self.barge_frames >= BARGE_IN_FRAMES:
-                await self._interrupt_assistant()
             return
-
-        # -------------------------
-        # Noise learning
-        # -------------------------
-        if self.noise_samples < NOISE_LEARN_FRAMES and rms < ABSOLUTE_MIN_RMS * 1.2:
-            self.noise_floor = (
-                (self.noise_floor * self.noise_samples) + rms
-            ) / (self.noise_samples + 1)
-            self.noise_samples += 1
-            return
-
-        threshold = max(self.noise_floor * NOISE_MULTIPLIER, ABSOLUTE_MIN_RMS)
-
-        if rms < threshold:
-            self.speech_frame_count = 0
-            return
-
-        self.speech_frame_count += 1
-        if self.speech_frame_count < MIN_SPEECH_FRAMES:
-            return
-
-        self.last_audio_rx_ts = time.time()
-        self.buffer_committed = False
-
-        pcm24k, self._resample_up = audioop.ratecv(
-            pcm8k, 2, 1, 8000, 24000, self._resample_up
-        )
 
         await self.socket.send(json.dumps({
             "type": "input_audio_buffer.append",
-            "audio": base64.b64encode(pcm24k).decode(),
+            "audio": audio_b64,
         }))
 
     # -------------------------
-    async def _interrupt_assistant(self):
-        logger.info("barge_in", call_sid=self.call_sid)
-
-        self.assistant_speaking = False
-        self.barge_frames = 0
-        self.buffer_committed = True
-
-        await self.socket.send(json.dumps({"type": "response.cancel"}))
-
-    # -------------------------
-    async def _silence_watcher(self):
-        while self.is_connected:
-            await asyncio.sleep(0.15)
-
-            if self.assistant_speaking or self.buffer_committed:
-                continue
-
-            if time.time() - self.last_audio_rx_ts > SILENCE_COMMIT_DELAY:
-                await self.socket.send(json.dumps({
-                    "type": "input_audio_buffer.commit"
-                }))
-                self.buffer_committed = True
-                self.speech_frame_count = 0
+    async def _handle_speech_started(self):
+        """Handle interruption when user starts speaking."""
+        # Even in half-duplex, we want to clear Twilio's buffers if something triggered
+        # though our 'ignore' logic in send_audio prevents actual interruption of flow.
+        if self.send_json_callback:
+            await self.send_json_callback({"event": "clear"})
 
     # -------------------------
     async def _receive_loop(self):
@@ -204,27 +142,33 @@ class RealtimeClient:
     async def _handle_event(self, data: dict):
         etype = data.get("type")
 
+        if etype == "error":
+            logger.error("realtime_error", error=data.get("error"))
+            return
+
         if etype == "response.audio.delta":
             if not self.assistant_speaking:
                 self.assistant_speaking = True
-
-            pcm24k = base64.b64decode(data["delta"])
-            pcm8k, self._resample_down = audioop.ratecv(
-                pcm24k, 2, 1, 24000, 8000, self._resample_down
-            )
-            ulaw = audioop.lin2ulaw(pcm8k, 2)
+            
+            if data.get("item_id"):
+                self.last_assistant_item = data["item_id"]
 
             if self.send_audio_callback:
-                await self.send_audio_callback(base64.b64encode(ulaw).decode())
+                await self.send_audio_callback(data["delta"])
 
         elif etype in ("response.done", "response.audio.done"):
-            self._reset_after_ai()
+            self.assistant_speaking = False
+
+        elif etype == "input_audio_buffer.speech_started":
+            logger.info("speech_started")
+            await self._handle_speech_started()
 
         elif etype == "conversation.item.input_audio_transcription.completed":
             user_text = data.get("transcript", "").strip()
             if not user_text:
                 return
 
+            logger.info("user_speech_transcribed", text=user_text)
             self.transcript.append({"role": "user", "content": user_text})
 
             context = await self.rag.retrieve(user_text)
@@ -243,19 +187,15 @@ class RealtimeClient:
 
             await self.socket.send(json.dumps({
                 "type": "response.create",
-                "response": {"modalities": ["audio"]},
+                "response": {"modalities": ["text", "audio"]},
             }))
-
-    # -------------------------
-    def _reset_after_ai(self):
-        self.assistant_speaking = False
-        self.buffer_committed = True
-        self.speech_frame_count = 0
-        self.last_audio_rx_ts = 0
 
     # -------------------------
     def set_on_audio_delta(self, cb: Callable[[str], None]):
         self.send_audio_callback = cb
+
+    def set_on_json_event(self, cb: Callable[[dict], None]):
+        self.send_json_callback = cb
 
     def get_transcript(self):
         if not self.transcript:

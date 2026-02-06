@@ -43,18 +43,24 @@ class RealtimeClient:
         
         self.transcript = []
         self.rag = RAGService()
+        self.preferred_language: Optional[str] = None
 
     # -------------------------
     async def connect(self):
-        endpoint = settings.azure_realtime_openai_endpoint.rstrip("/").replace(
-            "https://", "wss://"
-        )
-
-        url = (
-            f"{endpoint}/openai/realtime"
-            f"?api-version={settings.azure_openai_realtime_api_version}"
-            f"&deployment={settings.azure_openai_realtime_deployment}"
-        )
+        # Handle both full URL from .env or base endpoint
+        endpoint = settings.azure_realtime_openai_endpoint
+        
+        if "openai/realtime" in endpoint:
+            # Full URL provided
+            url = endpoint.replace("https://", "wss://")
+        else:
+            # Base endpoint provided
+            base_url = endpoint.rstrip("/").replace("https://", "wss://")
+            url = (
+                f"{base_url}/openai/realtime"
+                f"?api-version={settings.azure_openai_realtime_api_version}"
+                f"&deployment={settings.azure_openai_realtime_deployment}"
+            )
 
         self.socket = await websockets.connect(
             url,

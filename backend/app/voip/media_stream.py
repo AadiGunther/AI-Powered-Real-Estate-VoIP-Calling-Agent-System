@@ -57,18 +57,27 @@ async def media_stream_websocket(websocket: WebSocket):
 
                 client.set_on_audio_delta(send_audio)
 
+                async def send_json(data: dict):
+                    await websocket.send_json({
+                        "event": data["event"],
+                        "streamSid": stream_sid,
+                        **data
+                    })
+                
+                client.set_on_json_event(send_json)
+
                 await client.connect()
                 await client.update_session(REAL_ESTATE_ASSISTANT_PROMPT)
 
-                await asyncio.sleep(SESSION_INIT_WAIT_SECONDS)
-
-                await client.send_assistant_message(GREETING_MESSAGE)
+                # Step 1: Proactive greeting and question
+                await client.send_initial_greeting(GREETING_MESSAGE)
 
             # ---------------------------
             # AUDIO FROM TWILIO
             # ---------------------------
             elif event == "media":
                 if client and client.is_connected:
+                    # logger.debug("audio_from_twilio", call_sid=call_sid)
                     await client.send_audio(data["media"]["payload"])
 
             # ---------------------------

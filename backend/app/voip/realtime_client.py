@@ -6,6 +6,7 @@ from typing import Optional, Callable
 
 import websockets
 import audioop
+from twilio.rest import Client as TwilioClient
 
 from app.config import settings
 from app.utils.logging import get_logger
@@ -44,6 +45,7 @@ class RealtimeClient:
         self.transcript = []
         self.rag = RAGService()
         self.preferred_language: Optional[str] = None
+        self.active_question: bool = False
 
     # -------------------------
     async def connect(self):
@@ -84,7 +86,7 @@ class RealtimeClient:
             "session": {
                 "modalities": ["text", "audio"],
                 "instructions": instructions,
-                "voice": "alloy",
+                "voice": "shimmer",
                 "input_audio_format": "g711_ulaw",  # Direct from Twilio
                 "output_audio_format": "g711_ulaw", # Direct for Twilio
                 "turn_detection": {
@@ -93,6 +95,31 @@ class RealtimeClient:
                     "silence_duration_ms": 1000,
                     "create_response": False, # Manual trigger after RAG
                 },
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "end_call",
+                        "description": "End the call immediately after the user says goodbye or when the conversation is finished.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "name": "transfer_call",
+                        "description": "Transfer the call to a human agent when the user is unsatisfied or asks for an executive.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "reason": {"type": "string", "description": "Reason for transfer"}
+                            },
+                            "required": ["reason"]
+                        }
+                    }
+                ],
+                "tool_choice": "auto",
                 "input_audio_transcription": {"model": "whisper-1"},
             },
         }))
@@ -108,7 +135,7 @@ class RealtimeClient:
                 "content": [
                     {
                         "type": "input_text",
-                        "text": f"Greet the user with: '{greeting_text}'. Then wait for them to respond."
+                        "text": f"As Sophia, greet the caller by saying: '{greeting_text}'. Then pause and wait for their response."
                     }
                 ]
             }
@@ -117,6 +144,7 @@ class RealtimeClient:
             "type": "response.create",
             "response": {"modalities": ["text", "audio"]},
         }))
+        self.active_question = True
 
     # -------------------------
     async def send_audio(self, audio_b64: str):
@@ -162,8 +190,32 @@ class RealtimeClient:
             if self.send_audio_callback:
                 await self.send_audio_callback(data["delta"])
 
-        elif etype in ("response.done", "response.audio.done"):
+        elif etype == "response.audio.done":
+             # End of audio stream for this item
+             self.assistant_speaking = False
+
+        elif etype == "response.audio_transcript.done":
+            # Capture assistant's spoken response
+            transcript = data.get("transcript", "").strip()
+            if transcript:
+                logger.info("assistant_speech_transcribed", text=transcript)
+                self.transcript.append({"role": "assistant", "content": transcript})
+
+        elif etype == "response.done":
+            # Overall response done
             self.assistant_speaking = False
+            
+            # Check for function calls in the response items
+            output = data.get("response", {}).get("output", [])
+            for item in output:
+                if item.get("type") == "function_call":
+                    name = item.get("name")
+                    args = item.get("arguments", "{}")
+                    try:
+                        args_dict = json.loads(args)
+                        await self._handle_tool_call(name, args_dict)
+                    except json.JSONDecodeError:
+                        logger.error("tool_call_args_error", args=args)
 
         elif etype == "input_audio_buffer.speech_started":
             logger.info("speech_started")
@@ -177,16 +229,37 @@ class RealtimeClient:
             logger.info("user_speech_transcribed", text=user_text)
             self.transcript.append({"role": "user", "content": user_text})
 
+            if self.active_question:
+                augmented_text = f"This is my answer to your previous question: {user_text}"
+                self.active_question = False
+            else:
+                augmented_text = user_text
+
             context = await self.rag.retrieve(user_text)
 
+            # 1. Send RAG Context (if any) as a System/Assistant injection invisible to user
+            if context:
+                await self.socket.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "system",
+                        "content": [{
+                            "type": "input_text",
+                            "text": f"You are Sophia from ABC Real Estate. Stay warm, professional, and consistent in tone. Use this additional context when answering: {context}"
+                        }],
+                    },
+                }))
+
+            # 2. Send User Message proper
             await self.socket.send(json.dumps({
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
-                    "role": "system",
+                    "role": "user",
                     "content": [{
-                        "type": "text",
-                        "text": f"{context}\n\nUser: {user_text}"
+                        "type": "input_text",
+                        "text": augmented_text
                     }],
                 },
             }))
@@ -195,6 +268,7 @@ class RealtimeClient:
                 "type": "response.create",
                 "response": {"modalities": ["text", "audio"]},
             }))
+            self.active_question = True
 
     # -------------------------
     def set_on_audio_delta(self, cb: Callable[[str], None]):
@@ -212,3 +286,38 @@ class RealtimeClient:
         self.is_connected = False
         if self.socket:
             await self.socket.close()
+
+    # -------------------------
+    # TOOL HANDLING
+    # -------------------------
+    async def _handle_tool_call(self, name: str, args: dict):
+        logger.info("tool_call_triggered", name=name, args=args)
+        
+        if name == "end_call":
+            await self._end_twilio_call()
+        elif name == "transfer_call":
+            await self._transfer_twilio_call()
+
+    async def _end_twilio_call(self):
+        try:
+            client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
+            await asyncio.to_thread(
+                client.calls(self.call_sid).update, status="completed"
+            )
+            logger.info("call_ended_via_tool")
+        except Exception as e:
+            logger.error("end_call_failed", error=str(e))
+
+    async def _transfer_twilio_call(self):
+        try:
+            # Transfer to the configured phone number or fallback to default
+            target_number = settings.twilio_phone_number
+            twiml = f"<Response><Say>Please wait while we connect you with our executive.</Say><Dial>{target_number}</Dial></Response>"
+            
+            client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
+            await asyncio.to_thread(
+                client.calls(self.call_sid).update, twiml=twiml
+            )
+            logger.info("call_transferred_via_tool")
+        except Exception as e:
+            logger.error("transfer_call_failed", error=str(e))

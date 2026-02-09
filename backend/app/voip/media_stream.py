@@ -8,10 +8,15 @@ import json
 from typing import Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from datetime import datetime, timezone
 
+from app.database import async_session_maker
+from app.models.call import Call, CallStatus
 from app.voip.realtime_client import RealtimeClient
 from app.voip.prompts import REAL_ESTATE_ASSISTANT_PROMPT, GREETING_MESSAGE
 from app.services.report_service import ReportService
+from app.services.rag_service import RAGService
 from app.utils.logging import get_logger
 
 router = APIRouter()
@@ -43,7 +48,18 @@ async def media_stream_websocket(websocket: WebSocket):
                 stream_sid = data["streamSid"]
                 call_sid = data["start"]["callSid"]
 
-                logger.info("twilio_stream_started", call_sid=call_sid)
+                # Step 0: Mark call as in-progress in DB
+                try:
+                    async with async_session_maker() as db:
+                        result = await db.execute(select(Call).where(Call.call_sid == call_sid))
+                        call = result.scalar_one_or_none()
+                        if call:
+                            call.status = CallStatus.IN_PROGRESS.value
+                            if not call.started_at:
+                                call.started_at = datetime.now(timezone.utc)
+                            await db.commit()
+                except Exception as e:
+                    logger.error("call_start_update_failed", error=str(e), call_sid=call_sid)
 
                 client = RealtimeClient(call_sid)
                 active_calls[call_sid] = client
@@ -67,7 +83,13 @@ async def media_stream_websocket(websocket: WebSocket):
                 client.set_on_json_event(send_json)
 
                 await client.connect()
-                await client.update_session(REAL_ESTATE_ASSISTANT_PROMPT)
+                
+                # Fetch available locations and inject into prompt
+                rag = RAGService()
+                locations_text = await rag.get_available_locations()
+                full_prompt = f"{REAL_ESTATE_ASSISTANT_PROMPT}\n\n# CONTEXT: DATABASE INVENTORY\n{locations_text}"
+                
+                await client.update_session(full_prompt)
 
                 # Step 1: Proactive greeting and question
                 await client.send_initial_greeting(GREETING_MESSAGE)
@@ -104,6 +126,20 @@ async def media_stream_websocket(websocket: WebSocket):
             await client.close()
 
         if call_sid:
+            # Force update call status to completed if it ended
+            try:
+                async with async_session_maker() as db:
+                    result = await db.execute(select(Call).where(Call.call_sid == call_sid))
+                    call = result.scalar_one_or_none()
+                    if call and call.status not in [CallStatus.COMPLETED.value, CallStatus.FAILED.value]:
+                        call.status = CallStatus.COMPLETED.value
+                        call.ended_at = datetime.now(timezone.utc)
+                        if call.started_at:
+                            call.duration_seconds = int((call.ended_at - call.started_at).total_seconds())
+                        await db.commit()
+            except Exception as e:
+                logger.error("call_status_update_failed", error=str(e), call_sid=call_sid)
+            
             active_calls.pop(call_sid, None)
 
         logger.info("call_cleanup_complete", call_sid=call_sid)

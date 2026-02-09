@@ -1,9 +1,9 @@
 """Call schemas for request/response validation."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.call import CallDirection, CallStatus, CallOutcome
 
@@ -90,6 +90,13 @@ class CallResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_validator("created_at", "updated_at", "started_at", "answered_at", "ended_at", mode="after")
+    @classmethod
+    def force_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class CallSearchParams(BaseModel):

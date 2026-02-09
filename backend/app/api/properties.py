@@ -74,7 +74,6 @@ async def list_properties(
     bedrooms: Optional[int] = None,
     is_featured: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> PropertyListResponse:
     """List properties with optional filters."""
     # Build query
@@ -167,7 +166,6 @@ async def search_properties(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> PropertyListResponse:
     """Search properties by location, title, or description."""
     search_term = f"%{q}%"
@@ -208,7 +206,6 @@ async def search_properties(
 async def get_property(
     property_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> PropertyResponse:
     """Get property details by ID."""
     result = await db.execute(select(Property).where(Property.id == property_id))

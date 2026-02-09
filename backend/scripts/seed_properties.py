@@ -18,6 +18,7 @@ SAMPLE_PROPERTIES = [
         "address": "123 Tech Park Road, Whitefield",
         "city": "Bangalore",
         "state": "Karnataka",
+        "country": "India",
         "pincode": "560066",
         "locality": "Whitefield",
         "landmark": "Near ITPL",

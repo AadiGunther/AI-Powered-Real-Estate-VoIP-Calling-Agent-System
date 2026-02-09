@@ -11,6 +11,7 @@ export interface Lead {
     budget_max?: number;
     assigned_agent_id?: number;
     next_follow_up?: string;
+    ai_summary?: string;
     created_at: string;
 }
 

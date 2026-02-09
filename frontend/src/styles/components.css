@@ -93,6 +93,11 @@
     border-radius: 9999px;
 }
 
+.badge-default {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
 .badge-success {
     background: rgba(16, 185, 129, 0.1);
     color: var(--success);

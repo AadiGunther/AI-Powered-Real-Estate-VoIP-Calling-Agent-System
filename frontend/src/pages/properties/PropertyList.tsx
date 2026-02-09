@@ -49,9 +49,9 @@ export const PropertyList: React.FC = () => {
                     <h1>Properties</h1>
                     <p>{total} total properties</p>
                 </div>
-                <button className="btn btn-primary">
+                {/* <button className="btn btn-primary">
                     <Plus size={18} /> Add Property
-                </button>
+                </button> */}
             </div>
 
             <div className="filters-bar">

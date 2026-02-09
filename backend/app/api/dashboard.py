@@ -1,11 +1,11 @@
 """API endpoints for dashboard statistics and metrics."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import select, func, and_
+from pydantic import BaseModel, field_validator
+from sqlalchemy import select, func, and_, case
 
 from app.database import async_session_maker
 from app.models.call import Call, CallStatus, CallOutcome
@@ -43,6 +43,13 @@ class RecentCallResponse(BaseModel):
     transcript_summary: Optional[str]
     created_at: datetime
 
+    @field_validator("created_at", mode="after")
+    @classmethod
+    def force_utc(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
 
 class AgentPerformance(BaseModel):
     """Agent performance metrics."""
@@ -52,6 +59,57 @@ class AgentPerformance(BaseModel):
     answered_calls: int
     average_duration: float
     leads_assigned: int
+
+
+class ChartDataPoint(BaseModel):
+    """Chart data point."""
+    name: str
+    calls: int
+    leads: int
+
+
+@router.get("/charts", response_model=List[ChartDataPoint])
+async def get_dashboard_charts():
+    """Get chart data for the last 7 days."""
+    try:
+        async with async_session_maker() as db:
+            now = datetime.utcnow()
+            days = []
+            data = []
+            
+            # Generate last 7 days
+            for i in range(6, -1, -1):
+                date = now - timedelta(days=i)
+                days.append(date.date())
+                
+            for day in days:
+                # Count calls for this day
+                # SQLite-specific date handling
+                calls_count = await db.scalar(
+                    select(func.count(Call.id)).where(
+                        func.date(Call.created_at) == day.isoformat()
+                    )
+                )
+                
+                # Count leads for this day
+                leads_count = await db.scalar(
+                    select(func.count(Lead.id)).where(
+                        func.date(Lead.created_at) == day.isoformat()
+                    )
+                )
+                
+                data.append(
+                    ChartDataPoint(
+                        name=day.strftime("%a"), # Mon, Tue, etc.
+                        calls=calls_count or 0,
+                        leads=leads_count or 0
+                    )
+                )
+            
+            return data
+    except Exception as e:
+        logger.error("get_charts_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/stats", response_model=DashboardStats)
@@ -147,6 +205,67 @@ async def get_recent_calls(limit: int = Query(10, le=50)):
             ]
     except Exception as e:
         logger.error("get_recent_calls_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class PendingFollowUp(BaseModel):
+    """Pending follow-up lead."""
+    id: int
+    name: Optional[str]
+    phone: str
+    quality: str
+    last_contact: Optional[datetime]
+    notes: Optional[str]
+
+    @field_validator("last_contact", mode="after")
+    @classmethod
+    def force_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+@router.get("/pending-followups", response_model=List[PendingFollowUp])
+async def get_pending_followups(limit: int = Query(5, le=20)):
+    """Get all leads needing attention (Hot/Warm or New/Contacted)."""
+    try:
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(Lead)
+                .where(
+                    Lead.status.in_([
+                        LeadStatus.NEW.value, 
+                        LeadStatus.CONTACTED.value,
+                        LeadStatus.QUALIFIED.value
+                    ])
+                )
+                .order_by(
+                    # Prioritize Hot > Warm > Cold, then by recency
+                    case(
+                        (Lead.quality == LeadQuality.HOT.value, 1),
+                        (Lead.quality == LeadQuality.WARM.value, 2),
+                        (Lead.quality == LeadQuality.COLD.value, 3),
+                        else_=4
+                    ),
+                    Lead.updated_at.desc()
+                )
+                .limit(limit)
+            )
+            leads = result.scalars().all()
+            
+            return [
+                PendingFollowUp(
+                    id=lead.id,
+                    name=lead.name,
+                    phone=lead.phone,
+                    quality=lead.quality,
+                    last_contact=lead.updated_at,
+                    notes=lead.ai_summary or lead.notes
+                )
+                for lead in leads
+            ]
+    except Exception as e:
+        logger.error("get_pending_followups_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

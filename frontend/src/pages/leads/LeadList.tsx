@@ -65,6 +65,7 @@ export const LeadList: React.FC = () => {
                                 <th>Status</th>
                                 <th>Source</th>
                                 <th>Preferences</th>
+                                <th>AI Summary</th>
                                 <th>Created</th>
                             </tr>
                         </thead>
@@ -100,6 +101,17 @@ export const LeadList: React.FC = () => {
                                         {lead.budget_max && (
                                             <span className="lead-budget">Up to ₹{(lead.budget_max / 100000).toFixed(0)}L</span>
                                         )}
+                                    </td>
+                                    <td>
+                                        <div className="lead-summary" title={lead.ai_summary}>
+                                            {lead.ai_summary ? (
+                                                lead.ai_summary.length > 50 
+                                                    ? lead.ai_summary.substring(0, 50) + '...' 
+                                                    : lead.ai_summary
+                                            ) : (
+                                                <span className="text-muted">-</span>
+                                            )}
+                                        </div>
                                     </td>
                                     <td>
                                         <span className="lead-date">

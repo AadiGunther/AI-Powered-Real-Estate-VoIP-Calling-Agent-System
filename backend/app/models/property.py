@@ -44,6 +44,7 @@ class Property(Base):
     address: Mapped[str] = mapped_column(String(500), nullable=False)
     city: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     state: Mapped[str] = mapped_column(String(100), nullable=False)
+    country: Mapped[str] = mapped_column(String(100), nullable=False, default="India")
     pincode: Mapped[str] = mapped_column(String(10), nullable=False)
     locality: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     landmark: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

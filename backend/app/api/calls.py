@@ -21,7 +21,9 @@ from app.schemas.call import (
     DialRequest,
 )
 from app.utils.security import get_current_user
+from app.utils.logging import get_logger
 from twilio.rest import Client as TwilioClient
+from twilio.base.exceptions import TwilioRestException
 
 router = APIRouter()
 
@@ -40,6 +42,12 @@ async def dial_number(
         call_kwargs = {
             "to": request.to_number,
             "from_": settings.twilio_phone_number,
+            "status_callback": f"{settings.base_url}/twilio/status",
+            "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+            "status_callback_method": "POST",
+            "record": True,
+            "recording_status_callback": f"{settings.base_url}/twilio/recording",
+            "recording_status_callback_method": "POST",
         }
         
         if settings.twilio_application_sid:
@@ -72,6 +80,26 @@ async def dial_number(
         
         return db_call
         
+    except TwilioRestException as e:
+        logger = get_logger("api.calls")
+        logger.error("twilio_error", code=e.code, msg=e.msg, status=e.status)
+        
+        if e.code == 21219:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Twilio Trial Account Restriction: The destination number is not verified. Please verify the number in your Twilio console or upgrade your account."
+            )
+        elif e.code == 21214:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid phone number: The 'To' number is not a valid mobile number."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Twilio Error ({e.code}): {e.msg}"
+            )
+            
     except Exception as e:
         import traceback
         traceback.print_exc()

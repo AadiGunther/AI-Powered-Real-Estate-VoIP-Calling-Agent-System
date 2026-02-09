@@ -5,39 +5,100 @@ import api from '../../services/api';
 import './Dashboard.css';
 
 interface DashboardStats {
-    calls: { today: number; this_week: number };
-    leads: { total: number; hot: number };
-    properties: { active: number };
-    metrics: { conversion_rate: number; avg_call_duration_seconds: number };
+    total_calls_today: number;
+    total_calls_week: number;
+    total_calls_month: number;
+    active_calls: number;
+    total_leads: number;
+    hot_leads: number;
+    warm_leads: number;
+    cold_leads: number;
+    total_properties: number;
+    available_properties: number;
+    conversion_rate: number;
 }
 
-const mockChartData = [
-    { name: 'Mon', calls: 45, leads: 12 },
-    { name: 'Tue', calls: 52, leads: 18 },
-    { name: 'Wed', calls: 38, leads: 8 },
-    { name: 'Thu', calls: 61, leads: 22 },
-    { name: 'Fri', calls: 55, leads: 15 },
-    { name: 'Sat', calls: 32, leads: 10 },
-    { name: 'Sun', calls: 28, leads: 6 },
-];
+interface RecentCall {
+    id: number;
+    call_sid: string;
+    from_number: string;
+    status: string;
+    duration_seconds: number;
+    handled_by_ai: boolean;
+    transcript_summary: string;
+    created_at: string;
+}
+
+interface ChartDataPoint {
+    name: string;
+    calls: number;
+    leads: number;
+}
+
+interface PendingFollowUp {
+    id: number;
+    name: string | null;
+    phone: string;
+    quality: string;
+    last_contact: string;
+    notes: string | null;
+}
 
 export const Dashboard: React.FC = () => {
     const [stats, setStats] = useState<DashboardStats | null>(null);
-    const [, setLoading] = useState(true);
+    const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
+    const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+    const [pendingFollowUps, setPendingFollowUps] = useState<PendingFollowUp[]>([]);
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const fetchStats = async () => {
+        const fetchData = async () => {
             try {
-                const response = await api.get('/reports/summary');
-                setStats(response.data);
+                const [statsRes, callsRes, chartsRes, followUpsRes] = await Promise.all([
+                    api.get('/api/dashboard/stats'),
+                    api.get('/api/dashboard/recent-calls?limit=5'),
+                    api.get('/api/dashboard/charts'),
+                    api.get('/api/dashboard/pending-followups')
+                ]);
+                setStats(statsRes.data);
+                setRecentCalls(callsRes.data);
+                setChartData(chartsRes.data);
+                setPendingFollowUps(followUpsRes.data);
             } catch (error) {
-                console.error('Failed to fetch stats:', error);
+                console.error('Failed to fetch dashboard data:', error);
             } finally {
                 setLoading(false);
             }
         };
-        fetchStats();
+        fetchData();
     }, []);
+
+    const formatDuration = (seconds: number) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins}m ${secs}s`;
+    };
+
+    const getStatusBadgeClass = (status: string) => {
+        const map: Record<string, string> = {
+            'completed': 'success',
+            'no_answer': 'warning',
+            'busy': 'error',
+            'failed': 'error',
+            'in_progress': 'info',
+            'ringing': 'info',
+            'initiated': 'default'
+        };
+        return `badge badge-${map[status] || 'default'}`;
+    };
+
+    const isOngoing = (status: string) => {
+        return ['initiated', 'ringing', 'in_progress'].includes(status);
+    };
+
+    if (loading) {
+        return <div className="dashboard-loading">Loading dashboard data...</div>;
+    }
 
     return (
         <div className="dashboard">
@@ -53,8 +114,8 @@ export const Dashboard: React.FC = () => {
                     </div>
                     <div className="stat-content">
                         <span className="stat-label">Calls Today</span>
-                        <span className="stat-value">{stats?.calls.today || 0}</span>
-                        <span className="stat-change positive">+12% from yesterday</span>
+                        <span className="stat-value">{stats?.total_calls_today || 0}</span>
+                        <span className="stat-change positive">{stats?.total_calls_week || 0} this week</span>
                     </div>
                 </div>
 
@@ -64,8 +125,8 @@ export const Dashboard: React.FC = () => {
                     </div>
                     <div className="stat-content">
                         <span className="stat-label">Hot Leads</span>
-                        <span className="stat-value">{stats?.leads.hot || 0}</span>
-                        <span className="stat-change positive">+5 this week</span>
+                        <span className="stat-value">{stats?.hot_leads || 0}</span>
+                        <span className="stat-change positive">{stats?.total_leads || 0} total leads</span>
                     </div>
                 </div>
 
@@ -75,8 +136,8 @@ export const Dashboard: React.FC = () => {
                     </div>
                     <div className="stat-content">
                         <span className="stat-label">Active Properties</span>
-                        <span className="stat-value">{stats?.properties.active || 0}</span>
-                        <span className="stat-change neutral">3 new listings</span>
+                        <span className="stat-value">{stats?.available_properties || 0}</span>
+                        <span className="stat-change neutral">{stats?.total_properties || 0} total listings</span>
                     </div>
                 </div>
 
@@ -86,8 +147,8 @@ export const Dashboard: React.FC = () => {
                     </div>
                     <div className="stat-content">
                         <span className="stat-label">Conversion Rate</span>
-                        <span className="stat-value">{stats?.metrics.conversion_rate || 0}%</span>
-                        <span className="stat-change positive">+2.5% improvement</span>
+                        <span className="stat-value">{stats?.conversion_rate || 0}%</span>
+                        <span className="stat-change positive">Based on {stats?.total_leads || 0} leads</span>
                     </div>
                 </div>
             </div>
@@ -96,7 +157,7 @@ export const Dashboard: React.FC = () => {
                 <div className="chart-card">
                     <h3>Call Activity</h3>
                     <ResponsiveContainer width="100%" height={300}>
-                        <AreaChart data={mockChartData}>
+                        <AreaChart data={chartData}>
                             <defs>
                                 <linearGradient id="callGradient" x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
@@ -117,7 +178,7 @@ export const Dashboard: React.FC = () => {
                 <div className="chart-card">
                     <h3>Lead Generation</h3>
                     <ResponsiveContainer width="100%" height={300}>
-                        <AreaChart data={mockChartData}>
+                        <AreaChart data={chartData}>
                             <defs>
                                 <linearGradient id="leadGradient" x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
@@ -140,36 +201,55 @@ export const Dashboard: React.FC = () => {
                 <div className="recent-card">
                     <h3><PhoneIncoming size={20} /> Recent Calls</h3>
                     <div className="recent-list">
-                        {[1, 2, 3, 4, 5].map((i) => (
-                            <div key={i} className="recent-item">
-                                <div className="recent-avatar">
-                                    <Phone size={16} />
+                        {recentCalls.length > 0 ? (
+                            recentCalls.map((call) => (
+                                <div key={call.id} className="recent-item">
+                                    <div className="recent-avatar">
+                                        <Phone size={16} />
+                                    </div>
+                                    <div className="recent-info">
+                                        <span className="recent-title">{call.from_number}</span>
+                                        <span className="recent-subtitle">
+                                            {call.transcript_summary ? call.transcript_summary.substring(0, 40) + '...' : 'No summary'}
+                                            • {isOngoing(call.status) ? 'Ongoing' : formatDuration(call.duration_seconds || 0)}
+                                        </span>
+                                    </div>
+                                    <span className={getStatusBadgeClass(call.status)}>
+                                        {call.status.replace('_', ' ')}
+                                    </span>
                                 </div>
-                                <div className="recent-info">
-                                    <span className="recent-title">+91 98765 4321{i}</span>
-                                    <span className="recent-subtitle">Property inquiry • 3m 45s</span>
-                                </div>
-                                <span className="badge badge-success">Completed</span>
-                            </div>
-                        ))}
+                            ))
+                        ) : (
+                            <p style={{ padding: '20px', color: '#64748b', textAlign: 'center' }}>No recent calls found</p>
+                        )}
                     </div>
                 </div>
 
                 <div className="recent-card">
-                    <h3><Clock size={20} /> Pending Follow-ups</h3>
+                    <h3><Clock size={20} /> Action Required (Leads)</h3>
                     <div className="recent-list">
-                        {[1, 2, 3, 4, 5].map((i) => (
-                            <div key={i} className="recent-item">
-                                <div className="recent-avatar hot">
-                                    <Users size={16} />
+                        {pendingFollowUps.length > 0 ? (
+                            pendingFollowUps.map((lead) => (
+                                <div key={lead.id} className="recent-item">
+                                    <div className={`recent-avatar ${lead.quality === 'hot' ? 'hot' : (lead.quality === 'warm' ? 'warm' : 'cold')}`}>
+                                        <Users size={16} />
+                                    </div>
+                                    <div className="recent-info">
+                                        <span className="recent-title">{lead.name || lead.phone}</span>
+                                        <span className="recent-subtitle" title={lead.notes || ''}>
+                                            {lead.notes ? (
+                                                lead.notes.length > 50 ? lead.notes.substring(0, 50) + '...' : lead.notes
+                                            ) : 'New lead - No summary'}
+                                        </span>
+                                    </div>
+                                    <span className={`badge badge-${lead.quality === 'hot' ? 'error' : (lead.quality === 'warm' ? 'warning' : 'info')}`}>
+                                        {lead.quality}
+                                    </span>
                                 </div>
-                                <div className="recent-info">
-                                    <span className="recent-title">Customer {i}</span>
-                                    <span className="recent-subtitle">Follow up in {i} hour{i > 1 ? 's' : ''}</span>
-                                </div>
-                                <span className="badge badge-warning">Hot Lead</span>
-                            </div>
-                        ))}
+                            ))
+                        ) : (
+                            <p style={{ padding: '20px', color: '#64748b', textAlign: 'center' }}>All caught up!</p>
+                        )}
                     </div>
                 </div>
             </div>

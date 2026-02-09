@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     cors_origins: List[str] = []
     recordings_dir: str
 
+    # ---------------- AZURE STORAGE ----------------
+    azure_storage_connection_string: str = ""
+    azure_storage_container_name: str = "call-recordings"
+
     @computed_field
     @property
     def websocket_url(self) -> str:

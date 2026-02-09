@@ -20,6 +20,7 @@ from app.api.properties import router as properties_router
 from app.api.leads import router as leads_router
 from app.api.calls import router as calls_router
 from app.api.reports import router as reports_router
+from app.api.dashboard import router as dashboard_router
 from app.api.admin import router as admin_router
 from app.api.twilio_webhook import router as twilio_router
 from app.voip.media_stream import router as media_stream_router
@@ -56,6 +57,7 @@ app.add_middleware(
 
 print("BASE_URL:", settings.base_url)
 print("WEBSOCKET_URL:", settings.websocket_url)
+print("CORS_ORIGINS:", settings.cors_origins)
 
 # Mount static files for recordings
 app.mount("/recordings", StaticFiles(directory=settings.recordings_dir), name="recordings")
@@ -66,6 +68,7 @@ app.include_router(properties_router, prefix="/properties", tags=["Properties"])
 app.include_router(leads_router, prefix="/leads", tags=["Leads"])
 app.include_router(calls_router, prefix="/calls", tags=["Calls"])
 app.include_router(reports_router, prefix="/reports", tags=["Reports"])
+app.include_router(dashboard_router)
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 app.include_router(twilio_router, prefix="/twilio", tags=["Twilio"])
 app.include_router(media_stream_router, tags=["Media Stream"])

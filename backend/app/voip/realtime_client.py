@@ -384,3 +384,4 @@ class RealtimeClient:
             logger.info("call_transferred_via_tool")
         except Exception as e:
             logger.error("transfer_call_failed", error=str(e))
+

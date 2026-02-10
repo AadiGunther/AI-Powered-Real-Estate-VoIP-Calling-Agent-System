@@ -38,7 +38,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             <aside className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
                 <div className="sidebar-header">
                     <Building2 className="sidebar-logo-icon" />
-                    {sidebarOpen && <span className="sidebar-logo-text">ABC Real Estate</span>}
+                    {sidebarOpen && <span className="sidebar-logo-text">Ujjwal Energies</span>}
                 </div>
 
                 <nav className="sidebar-nav">

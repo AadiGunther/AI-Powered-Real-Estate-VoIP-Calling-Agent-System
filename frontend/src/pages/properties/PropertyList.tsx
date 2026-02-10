@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, Plus, Search, Filter, MapPin, Bed, Square, IndianRupee } from 'lucide-react';
+import { Building2, Search, Filter, MapPin, Bed, Square, IndianRupee } from 'lucide-react';
 import api from '../../services/api';
 import type { Property, PropertyListResponse } from '../../types/property';
 import './Properties.css';

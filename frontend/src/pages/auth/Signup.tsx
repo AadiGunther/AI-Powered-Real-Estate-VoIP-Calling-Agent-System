@@ -47,7 +47,7 @@ export const Signup: React.FC = () => {
             <div className="auth-card animate-fade-in">
                 <div className="auth-logo">
                     <Building2 size={40} />
-                    <span> Real Estate</span>
+                    <span> Ujjwal Energies</span>
                 </div>
                 <h1 className="auth-title">Create Account</h1>
                 <p className="auth-subtitle">Join us to manage your real estate calls</p>

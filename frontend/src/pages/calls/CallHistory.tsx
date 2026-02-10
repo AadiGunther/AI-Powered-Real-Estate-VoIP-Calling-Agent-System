@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Phone, Calendar, Clock, User, ArrowUpRight, ArrowDownLeft, Search, Filter } from 'lucide-react';
+import { Phone, Calendar, ArrowUpRight, ArrowDownLeft, Filter } from 'lucide-react';
 import api from '../../services/api';
 import type { Call, CallListResponse } from '../../types/call';
 import { OutboundCallModal } from '../../components/OutboundCallModal';
@@ -198,14 +198,56 @@ export const CallHistory: React.FC = () => {
                                     <strong>Duration:</strong> {formatDuration(selectedCall.duration_seconds)}
                                 </div>
                                 <div>
-                                    <strong>Date & Time:</strong> {formatDate(selectedCall.created_at)}
+                                    <strong>Created At:</strong> {formatDate(selectedCall.created_at)}
                                 </div>
+                                {selectedCall.started_at && (
+                                    <div>
+                                        <strong>Started At:</strong> {formatDate(selectedCall.started_at)}
+                                    </div>
+                                )}
+                                {selectedCall.answered_at && (
+                                    <div>
+                                        <strong>Answered At:</strong> {formatDate(selectedCall.answered_at)}
+                                    </div>
+                                )}
+                                {selectedCall.ended_at && (
+                                    <div>
+                                        <strong>Ended At:</strong> {formatDate(selectedCall.ended_at)}
+                                    </div>
+                                )}
                                 <div>
                                     <strong>Handled By:</strong> {selectedCall.handled_by_ai ? 'AI Agent' : 'Human'}
                                 </div>
                                 <div>
                                     <strong>Outcome:</strong> {selectedCall.outcome ? selectedCall.outcome.replace('_', ' ') : '-'}
                                 </div>
+                                {selectedCall.escalated_to_human && (
+                                    <div className="call-details-notes">
+                                        <strong>Escalated To Human:</strong> Yes
+                                        {selectedCall.escalation_reason && (
+                                            <> – {selectedCall.escalation_reason}</>
+                                        )}
+                                    </div>
+                                )}
+                                {selectedCall.lead_created !== undefined && (
+                                    <div className="call-details-notes">
+                                        <strong>Lead Created:</strong> {selectedCall.lead_created ? 'Yes' : 'No'}
+                                    </div>
+                                )}
+                                {(selectedCall.sentiment_score !== undefined || selectedCall.customer_satisfaction !== undefined) && (
+                                    <div className="call-details-notes">
+                                        {selectedCall.sentiment_score !== undefined && (
+                                            <div>
+                                                <strong>Sentiment Score:</strong> {selectedCall.sentiment_score.toFixed(2)}
+                                            </div>
+                                        )}
+                                        {selectedCall.customer_satisfaction !== undefined && (
+                                            <div>
+                                                <strong>Customer Satisfaction:</strong> {selectedCall.customer_satisfaction}/5
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                                 {selectedCall.outcome_notes && (
                                     <div className="call-details-notes">
                                         <strong>Outcome Notes:</strong> {selectedCall.outcome_notes}
@@ -214,6 +256,14 @@ export const CallHistory: React.FC = () => {
                                 {selectedCall.transcript_summary && (
                                     <div className="call-details-notes">
                                         <strong>Transcript Summary:</strong> {selectedCall.transcript_summary}
+                                    </div>
+                                )}
+                                {selectedCall.recording_url && (
+                                    <div className="call-details-notes">
+                                        <strong>Recording:</strong>{' '}
+                                        <a href={selectedCall.recording_url} target="_blank" rel="noopener noreferrer">
+                                            Play Recording
+                                        </a>
                                     </div>
                                 )}
                             </div>

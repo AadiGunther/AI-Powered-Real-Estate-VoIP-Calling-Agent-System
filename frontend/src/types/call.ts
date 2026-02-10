@@ -6,8 +6,13 @@ export interface Call {
     to_number: string;
     status: string;
     duration_seconds?: number;
+    started_at?: string;
+    answered_at?: string;
+    ended_at?: string;
     handled_by_ai: boolean;
     escalated_to_human: boolean;
+    escalated_to_agent_id?: number;
+    escalation_reason?: string;
     recording_url?: string;
     transcript_summary?: string;
     outcome?: string;
@@ -16,6 +21,10 @@ export interface Call {
     transcript_id?: string;
     properties_discussed?: string; // JSON string of IDs
     created_at: string;
+    updated_at?: string;
+    lead_created?: boolean;
+    sentiment_score?: number;
+    customer_satisfaction?: number;
 }
 
 export interface CallListResponse {

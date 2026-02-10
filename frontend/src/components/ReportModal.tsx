@@ -8,14 +8,6 @@ interface ReportModalProps {
     onClose: () => void;
 }
 
-interface AnalysisData {
-    summary: string;
-    customer_intent: string;
-    interest_level: 'High' | 'Medium' | 'Low';
-    follow_up_required: boolean;
-    action_items: string[];
-}
-
 export const ReportModal: React.FC<ReportModalProps> = ({ call, onClose }) => {
     // Parse the analysis if available (it might be stored in outcome_notes or we fetch it)
     // For now, we assume the backend might return the full analysis in a future endpoint.

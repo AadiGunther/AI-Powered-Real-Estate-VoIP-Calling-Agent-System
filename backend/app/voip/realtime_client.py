@@ -22,8 +22,8 @@ NOISE_MULTIPLIER = 3.0
 ABSOLUTE_MIN_RMS = 180
 
 MIN_SPEECH_FRAMES = 10
-BARGE_IN_FRAMES = 4
-BARGE_IN_MULTIPLIER = 1.8
+BARGE_IN_FRAMES = 8
+BARGE_IN_MULTIPLIER = 2.5
 
 SILENCE_COMMIT_DELAY = 1.1
 PING_INTERVAL = 20
@@ -35,12 +35,16 @@ class RealtimeClient:
         self.call_sid = call_sid
         self.socket: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
+        self._noise_floor_rms: Optional[float] = None
+        self._noise_frames_collected = 0
 
         self.send_audio_callback: Optional[Callable[[str], None]] = None
         self.send_json_callback: Optional[Callable[[dict], None]] = None
 
         self.assistant_speaking = False
         self.last_assistant_item: Optional[str] = None
+        self._assistant_speech_started_at: Optional[float] = None
+        self._barge_in_frames: int = 0
         
         self.transcript = []
         self.rag = RAGService()
@@ -51,6 +55,7 @@ class RealtimeClient:
         self._last_user_speech_at: Optional[float] = None
         self.awaiting_budget_answer: bool = False
         self.budget_value: Optional[str] = None
+        self._last_user_utterance: Optional[str] = None
 
     # -------------------------
     async def connect(self):
@@ -91,20 +96,20 @@ class RealtimeClient:
             "session": {
                 "modalities": ["text", "audio"],
                 "instructions": instructions,
-                "voice": "shimmer",
+                "voice": "alloy",
                 "input_audio_format": "g711_ulaw",
                 "output_audio_format": "g711_ulaw",
                 "turn_detection": {
                     "type": "server_vad",
                     "threshold": 0.6,
-                    "silence_duration_ms": int(SILENCE_COMMIT_DELAY * 1000),
-                    "create_response": False, # Manual trigger after RAG
+                    "silence_duration_ms": 900,
+                    "create_response": False,
                 },
                 "tools": [
                     {
                         "type": "function",
                         "name": "end_call",
-                        "description": "End the call immediately. Use this when the user says 'thank you', 'goodbye', or when the conversation is finished.",
+                        "description": "End the call immediately. Use this ONLY when the caller clearly says goodbye, asks to end the call, or indicates they want to disconnect.",
                         "parameters": {
                             "type": "object",
                             "properties": {},
@@ -131,7 +136,6 @@ class RealtimeClient:
 
     # -------------------------
     async def send_initial_greeting(self, greeting_text: str):
-        """Send the initial greeting as if it were a user instruction to the AI."""
         await self.socket.send(json.dumps({
             "type": "conversation.item.create",
             "item": {
@@ -140,27 +144,23 @@ class RealtimeClient:
                 "content": [
                     {
                         "type": "input_text",
-                        "text": f"As Sophia, greet the caller by saying: '{greeting_text}'. Then pause and wait for their response."
+                        "text": f"As Riya, a Hindi-speaking solar sales consultant for Ujjwal Energies, greet the caller by saying: '{greeting_text}'. Then pause and wait for their response."
                     }
                 ]
             }
         }))
         await self.socket.send(json.dumps({
             "type": "response.create",
-            "response": {
-                "modalities": ["text", "audio"],
-                "voice": "shimmer", # Force voice on greeting
-            },
+                "response": {
+                    "modalities": ["text", "audio"],
+                    "voice": "alloy",
+                },
         }))
         self.active_question = True
 
     # -------------------------
     async def send_audio(self, audio_b64: str):
-        if not self.is_connected:
-            return
-
-        # Half-duplex turn taking: ignore user while AI speaks
-        if self.assistant_speaking:
+        if not self.is_connected or self.assistant_speaking:
             return
 
         await self.socket.send(json.dumps({
@@ -191,7 +191,9 @@ class RealtimeClient:
         if etype == "response.audio.delta":
             if not self.assistant_speaking:
                 self.assistant_speaking = True
-            
+                self._assistant_speech_started_at = time.time()
+                self._barge_in_frames = 0
+
             if data.get("item_id"):
                 self.last_assistant_item = data["item_id"]
 
@@ -199,8 +201,9 @@ class RealtimeClient:
                 await self.send_audio_callback(data["delta"])
 
         elif etype == "response.audio.done":
-             # End of audio stream for this item
              self.assistant_speaking = False
+             self._assistant_speech_started_at = None
+             self._barge_in_frames = 0
 
         elif etype == "response.audio_transcript.done":
             transcript = data.get("transcript", "").strip()
@@ -210,8 +213,6 @@ class RealtimeClient:
                 lower = transcript.lower()
                 if "budget" in lower and ("what" in lower or "approximate" in lower or "range" in lower):
                     self.awaiting_budget_answer = True
-                if "thank you" in lower and "have a wonderful day" in lower:
-                    await self._schedule_call_end()
 
         elif etype == "response.done":
             # Overall response done
@@ -239,6 +240,7 @@ class RealtimeClient:
                 return
 
             logger.info("user_speech_transcribed", text=user_text)
+            self._last_user_utterance = user_text.lower()
             self.transcript.append({"role": "user", "content": user_text})
             now = time.time()
             self._last_user_speech_at = now
@@ -257,7 +259,10 @@ class RealtimeClient:
             else:
                 augmented_text = user_text
 
-            context = await self.rag.retrieve(user_text)
+            try:
+                context = await asyncio.wait_for(self.rag.retrieve(user_text), timeout=0.7)
+            except Exception:
+                context = ""
 
             if self.budget_value:
                 memory_text = (
@@ -281,16 +286,23 @@ class RealtimeClient:
             # 1. Send RAG Context (if any) as a System/Assistant injection invisible to user
             if context:
                 await self.socket.send(json.dumps({
-            "type": "conversation.item.create",
-            "item": {
-                "type": "message",
-                "role": "system",
-                "content": [{
-                    "type": "input_text",
-                    "text": f"You are Sophia from ABC Real Estate. Stay warm, professional, and consistent in tone (use 'shimmer' voice). Use this additional context when answering: {context}"
-                }],
-            },
-        }))
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "system",
+                        "content": [{
+                            "type": "input_text",
+                            "text": (
+                                "You are Riya, a Hindi-speaking solar energy sales consultant for Ujjwal Energies. "
+                                "Your voice and tone must always sound like a soft, clearly feminine, friendly young woman, and you must not change away from this feminine style at any point in the call. "
+                                "Speak in a calm, gentle voice in Hindi or natural Hinglish, sounding warm, respectful, and patient, never rushed or aggressive. "
+                                "You must never stay silent after the customer speaks: for every user message, always reply with at least a short acknowledgement in Hindi and, when appropriate, the next relevant question from your checklist. "
+                                "Whenever the customer asks a question, first answer it clearly in Hindi or Hinglish before asking your next question. "
+                                f"Use this additional context when answering: {context}"
+                            )
+                        }],
+                    },
+                }))
 
             # 2. Send User Message proper
             await self.socket.send(json.dumps({
@@ -309,7 +321,7 @@ class RealtimeClient:
                 "type": "response.create",
                 "response": {
                     "modalities": ["text", "audio"],
-                    "voice": "shimmer", # RE-ENFORCE VOICE HERE
+                    "voice": "alloy",
                 },
             }))
             self.active_question = True
@@ -357,7 +369,8 @@ class RealtimeClient:
         logger.info("tool_call_triggered", name=name, args=args)
         
         if name == "end_call":
-            await self._end_twilio_call()
+            logger.info("end_call_ignored_temporarily", reason="auto_call_cutoff_disabled")
+            return
         elif name == "transfer_call":
             await self._transfer_twilio_call()
 
@@ -385,3 +398,50 @@ class RealtimeClient:
         except Exception as e:
             logger.error("transfer_call_failed", error=str(e))
 
+    def _calculate_rms(self, audio_bytes: bytes) -> int:
+        return audioop.rms(self._mulaw_to_pcm(audio_bytes), 2)
+
+    def _mulaw_to_pcm(self, audio_bytes: bytes) -> bytes:
+        return audioop.ulaw2lin(audio_bytes, 2)
+
+    def _reset_noise_floor(self):
+        self._noise_floor_rms = None
+        self._noise_frames_collected = 0
+
+    def _update_noise_floor(self, rms: int):
+        if rms <= 0:
+            return
+        if self._noise_floor_rms is None:
+            self._noise_floor_rms = rms
+            self._noise_frames_collected = 1
+            return
+        if self._noise_frames_collected >= NOISE_LEARN_FRAMES:
+            alpha = 0.1
+            self._noise_floor_rms = int(self._noise_floor_rms * (1 - alpha) + rms * alpha)
+        else:
+            total = self._noise_floor_rms * self._noise_frames_collected + rms
+            self._noise_frames_collected += 1
+            self._noise_floor_rms = int(total / self._noise_frames_collected)
+
+    def _can_end_call_from_tool(self) -> bool:
+        if not self._last_user_utterance:
+            return False
+        text = self._last_user_utterance
+        goodbye_markers = [
+            "thank you",
+            "thanks",
+            "goodbye",
+            "good bye",
+            "bye",
+            "bye bye",
+            "theek hai",
+            "thik hai",
+            "rakhta hoon",
+            "rakhti hoon",
+            "rakhte hain",
+            "call cut",
+            "band kar",
+            "shukriya",
+            "dhanyavaad",
+        ]
+        return any(marker in text for marker in goodbye_markers)

@@ -104,7 +104,7 @@ export const Dashboard: React.FC = () => {
         <div className="dashboard">
             <div className="dashboard-header">
                 <h1>Dashboard</h1>
-                <p>Overview of your real estate operations</p>
+                <p>Overview of your solar sales operations</p>
             </div>
 
             <div className="stats-grid">

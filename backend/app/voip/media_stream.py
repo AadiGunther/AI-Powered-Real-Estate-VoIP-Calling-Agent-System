@@ -90,7 +90,10 @@ async def media_stream_websocket(websocket: WebSocket):
                 full_prompt = f"{REAL_ESTATE_ASSISTANT_PROMPT}\n\n# CONTEXT: DATABASE INVENTORY\n{locations_text}"
                 
                 await client.update_session(full_prompt)
-
+                
+                # Small delay to ensure session is fully initialized before greeting
+                await asyncio.sleep(SESSION_INIT_WAIT_SECONDS)
+                
                 # Step 1: Proactive greeting and question
                 await client.send_initial_greeting(GREETING_MESSAGE)
 

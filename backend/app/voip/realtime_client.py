@@ -46,6 +46,11 @@ class RealtimeClient:
         self.rag = RAGService()
         self.preferred_language: Optional[str] = None
         self.active_question: bool = False
+        self._closing_timer: Optional[asyncio.Task] = None
+        self._closing_started_at: Optional[float] = None
+        self._last_user_speech_at: Optional[float] = None
+        self.awaiting_budget_answer: bool = False
+        self.budget_value: Optional[str] = None
 
     # -------------------------
     async def connect(self):
@@ -87,19 +92,19 @@ class RealtimeClient:
                 "modalities": ["text", "audio"],
                 "instructions": instructions,
                 "voice": "shimmer",
-                "input_audio_format": "g711_ulaw",  # Direct from Twilio
-                "output_audio_format": "g711_ulaw", # Direct for Twilio
+                "input_audio_format": "g711_ulaw",
+                "output_audio_format": "g711_ulaw",
                 "turn_detection": {
                     "type": "server_vad",
                     "threshold": 0.6,
-                    "silence_duration_ms": 1000,
+                    "silence_duration_ms": int(SILENCE_COMMIT_DELAY * 1000),
                     "create_response": False, # Manual trigger after RAG
                 },
                 "tools": [
                     {
                         "type": "function",
                         "name": "end_call",
-                        "description": "End the call immediately after the user says goodbye or when the conversation is finished.",
+                        "description": "End the call immediately. Use this when the user says 'thank you', 'goodbye', or when the conversation is finished.",
                         "parameters": {
                             "type": "object",
                             "properties": {},
@@ -142,7 +147,10 @@ class RealtimeClient:
         }))
         await self.socket.send(json.dumps({
             "type": "response.create",
-            "response": {"modalities": ["text", "audio"]},
+            "response": {
+                "modalities": ["text", "audio"],
+                "voice": "shimmer", # Force voice on greeting
+            },
         }))
         self.active_question = True
 
@@ -195,11 +203,15 @@ class RealtimeClient:
              self.assistant_speaking = False
 
         elif etype == "response.audio_transcript.done":
-            # Capture assistant's spoken response
             transcript = data.get("transcript", "").strip()
             if transcript:
                 logger.info("assistant_speech_transcribed", text=transcript)
                 self.transcript.append({"role": "assistant", "content": transcript})
+                lower = transcript.lower()
+                if "budget" in lower and ("what" in lower or "approximate" in lower or "range" in lower):
+                    self.awaiting_budget_answer = True
+                if "thank you" in lower and "have a wonderful day" in lower:
+                    await self._schedule_call_end()
 
         elif etype == "response.done":
             # Overall response done
@@ -228,6 +240,16 @@ class RealtimeClient:
 
             logger.info("user_speech_transcribed", text=user_text)
             self.transcript.append({"role": "user", "content": user_text})
+            now = time.time()
+            self._last_user_speech_at = now
+            if self._closing_started_at is not None and now > self._closing_started_at:
+                self._closing_started_at = None
+                if self._closing_timer and not self._closing_timer.done():
+                    self._closing_timer.cancel()
+
+            if self.awaiting_budget_answer:
+                self.budget_value = user_text
+                self.awaiting_budget_answer = False
 
             if self.active_question:
                 augmented_text = f"This is my answer to your previous question: {user_text}"
@@ -237,8 +259,13 @@ class RealtimeClient:
 
             context = await self.rag.retrieve(user_text)
 
-            # 1. Send RAG Context (if any) as a System/Assistant injection invisible to user
-            if context:
+            if self.budget_value:
+                memory_text = (
+                    f"The user has already provided their budget as: {self.budget_value}. "
+                    f"Do not ask for the budget again unless the user explicitly changes it. "
+                    f"If properties are above or below this budget, suggest suitable alternatives "
+                    f"while keeping this budget as the reference."
+                )
                 await self.socket.send(json.dumps({
                     "type": "conversation.item.create",
                     "item": {
@@ -246,10 +273,24 @@ class RealtimeClient:
                         "role": "system",
                         "content": [{
                             "type": "input_text",
-                            "text": f"You are Sophia from ABC Real Estate. Stay warm, professional, and consistent in tone. Use this additional context when answering: {context}"
+                            "text": memory_text,
                         }],
                     },
                 }))
+
+            # 1. Send RAG Context (if any) as a System/Assistant injection invisible to user
+            if context:
+                await self.socket.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "system",
+                "content": [{
+                    "type": "input_text",
+                    "text": f"You are Sophia from ABC Real Estate. Stay warm, professional, and consistent in tone (use 'shimmer' voice). Use this additional context when answering: {context}"
+                }],
+            },
+        }))
 
             # 2. Send User Message proper
             await self.socket.send(json.dumps({
@@ -266,9 +307,31 @@ class RealtimeClient:
 
             await self.socket.send(json.dumps({
                 "type": "response.create",
-                "response": {"modalities": ["text", "audio"]},
+                "response": {
+                    "modalities": ["text", "audio"],
+                    "voice": "shimmer", # RE-ENFORCE VOICE HERE
+                },
             }))
             self.active_question = True
+
+    async def _schedule_call_end(self):
+        start_time = time.time()
+        self._closing_started_at = start_time
+        if self._closing_timer and not self._closing_timer.done():
+            self._closing_timer.cancel()
+
+        async def wait_and_end(expected_start: float):
+            try:
+                await asyncio.sleep(3)
+                if self._closing_started_at != expected_start:
+                    return
+                if self._last_user_speech_at and self._last_user_speech_at > expected_start:
+                    return
+                await self._end_twilio_call()
+            except asyncio.CancelledError:
+                return
+
+        self._closing_timer = asyncio.create_task(wait_and_end(start_time))
 
     # -------------------------
     def set_on_audio_delta(self, cb: Callable[[str], None]):

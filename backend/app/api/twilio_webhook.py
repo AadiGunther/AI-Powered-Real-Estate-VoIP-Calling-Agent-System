@@ -274,9 +274,9 @@ async def handle_call_status(
 @router.post("/recording")
 async def handle_recording_status(
     CallSid: str = Form(..., alias="CallSid"),
-    RecordingUrl: str = Form(..., alias="RecordingUrl"),
-    RecordingSid: str = Form(..., alias="RecordingSid"),
-    RecordingDuration: str = Form(..., alias="RecordingDuration"),
+    RecordingUrl: Optional[str] = Form(None, alias="RecordingUrl"),
+    RecordingSid: Optional[str] = Form(None, alias="RecordingSid"),
+    RecordingDuration: Optional[str] = Form(None, alias="RecordingDuration"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Handle Twilio recording status webhook."""
@@ -291,34 +291,40 @@ async def handle_recording_status(
         result = await db.execute(select(Call).where(Call.call_sid == CallSid))
         call = result.scalar_one_or_none()
         
-        if call:
-            # 1. Download recording from Twilio
+        if call and RecordingUrl:
             azure_url = None
-            if RecordingUrl:
-                try:
-                    async with httpx.AsyncClient() as client:
-                        # Append .mp3 to force MP3 format
-                        download_url = f"{RecordingUrl}.mp3"
-                        resp = await client.get(download_url, timeout=60.0)
-                        
-                        if resp.status_code == 200:
-                            # 2. Upload to Azure Blob Storage
-                            blob_service = BlobService()
-                            file_name = f"{CallSid}_{RecordingSid}.mp3"
-                            azure_url = await blob_service.upload_file(
-                                file_data=resp.content,
-                                file_name=file_name,
-                                content_type="audio/mpeg"
-                            )
-                        else:
-                            logger.error("recording_download_failed", status=resp.status_code)
-                except Exception as e:
-                    logger.error("recording_processing_failed", error=str(e))
+            try:
+                async with httpx.AsyncClient() as client:
+                    download_url = f"{RecordingUrl}.mp3"
+                    resp = await client.get(
+                        download_url,
+                        timeout=60.0,
+                        auth=(
+                            settings.twilio_account_sid,
+                            settings.twilio_auth_token,
+                        ),
+                    )
+                    
+                    if resp.status_code == 200:
+                        blob_service = BlobService()
+                        file_name = f"{CallSid}_{RecordingSid or 'no_sid'}.mp3"
+                        azure_url = await blob_service.upload_file(
+                            file_data=resp.content,
+                            file_name=file_name,
+                            content_type="audio/mpeg"
+                        )
+                    else:
+                        logger.error("recording_download_failed", status=resp.status_code)
+            except Exception as e:
+                logger.error("recording_processing_failed", error=str(e))
 
-            # 3. Update DB with Azure URL (or fallback to Twilio URL)
             call.recording_url = azure_url if azure_url else RecordingUrl
             call.recording_sid = RecordingSid
-            call.recording_duration = int(RecordingDuration)
+            if RecordingDuration:
+                try:
+                    call.recording_duration = int(RecordingDuration)
+                except ValueError:
+                    logger.error("recording_duration_parse_failed", raw=RecordingDuration)
             await db.flush()
         
         return {"status": "processed"}
@@ -349,7 +355,7 @@ async def handle_fallback(
         response.say(
             "We're sorry, we're experiencing technical difficulties. "
             "Please try again later or contact us at our main office.",
-            voice="Polly.Joanna"
+            voice="Polly.Joanna-Neural"
         )
         response.hangup()
         

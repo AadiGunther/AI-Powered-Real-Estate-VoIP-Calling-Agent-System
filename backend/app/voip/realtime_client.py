@@ -56,6 +56,8 @@ class RealtimeClient:
         self.awaiting_budget_answer: bool = False
         self.budget_value: Optional[str] = None
         self._last_user_utterance: Optional[str] = None
+        self.awaiting_name_answer: bool = False
+        self.customer_name: Optional[str] = None
 
     # -------------------------
     async def connect(self):
@@ -213,6 +215,8 @@ class RealtimeClient:
                 lower = transcript.lower()
                 if "budget" in lower and ("what" in lower or "approximate" in lower or "range" in lower):
                     self.awaiting_budget_answer = True
+                if "aapka naam" in lower or "apka naam" in lower or ("naam" in lower and "kya" in lower and "hai" in lower):
+                    self.awaiting_name_answer = True
 
         elif etype == "response.done":
             # Overall response done
@@ -252,6 +256,26 @@ class RealtimeClient:
             if self.awaiting_budget_answer:
                 self.budget_value = user_text
                 self.awaiting_budget_answer = False
+
+            if self.awaiting_name_answer:
+                self.customer_name = user_text.strip()
+                self.awaiting_name_answer = False
+                memory_text = (
+                    f"The customer's name is: {self.customer_name}. "
+                    f"Always address them as {self.customer_name} ji in Hindi, "
+                    "and do not ask for their name again unless the line was unclear."
+                )
+                await self.socket.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "system",
+                        "content": [{
+                            "type": "input_text",
+                            "text": memory_text,
+                        }],
+                    },
+                }))
 
             if self.active_question:
                 augmented_text = f"This is my answer to your previous question: {user_text}"
@@ -295,6 +319,7 @@ class RealtimeClient:
                             "text": (
                                 "You are Riya, a Hindi-speaking solar energy sales consultant for Ujjwal Energies. "
                                 "Your voice and tone must always sound like a soft, clearly feminine, friendly young woman, and you must not change away from this feminine style at any point in the call. "
+                                "Keep your pitch, speed, and energy level stable and gentle from start to finish; do not suddenly become louder, more dramatic, or more excited even if the customer keeps refusing or saying no. "
                                 "Speak in a calm, gentle voice in Hindi or natural Hinglish, sounding warm, respectful, and patient, never rushed or aggressive. "
                                 "You must never stay silent after the customer speaks: for every user message, always reply with at least a short acknowledgement in Hindi and, when appropriate, the next relevant question from your checklist. "
                                 "Whenever the customer asks a question, first answer it clearly in Hindi or Hinglish before asking your next question. "

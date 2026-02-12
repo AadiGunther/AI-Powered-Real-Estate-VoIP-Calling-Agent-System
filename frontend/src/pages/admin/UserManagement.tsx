@@ -7,6 +7,7 @@ import '../properties/Properties.css';
 export const UserManagement: React.FC = () => {
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         fetchUsers();
@@ -14,10 +15,15 @@ export const UserManagement: React.FC = () => {
 
     const fetchUsers = async () => {
         try {
+            setError(null);
+            setLoading(true);
             const response = await api.get('/admin/users');
+            console.log('Fetched users:', response.data);
             setUsers(response.data.users);
         } catch (error) {
             console.error('Failed to fetch users:', error);
+            setError('Failed to load users. Please try again.');
+            setUsers([]);
         } finally {
             setLoading(false);
         }
@@ -51,9 +57,17 @@ export const UserManagement: React.FC = () => {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && (
                 <div className="loading">Loading users...</div>
-            ) : (
+            )}
+
+            {!loading && error && (
+                <div className="error-message">
+                    {error}
+                </div>
+            )}
+
+            {!loading && !error && (
                 <div className="card">
                     <table className="table">
                         <thead>

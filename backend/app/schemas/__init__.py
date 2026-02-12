@@ -22,6 +22,12 @@ from app.schemas.property import (
     PropertyListResponse,
     PropertySearchParams,
 )
+from app.schemas.product import (
+    ProductCreate,
+    ProductUpdate,
+    ProductResponse,
+    ProductListResponse,
+)
 from app.schemas.lead import (
     LeadCreate,
     LeadUpdate,
@@ -63,6 +69,11 @@ __all__ = [
     "PropertyResponse",
     "PropertyListResponse",
     "PropertySearchParams",
+    # Product
+    "ProductCreate",
+    "ProductUpdate",
+    "ProductResponse",
+    "ProductListResponse",
     # Lead
     "LeadCreate",
     "LeadUpdate",

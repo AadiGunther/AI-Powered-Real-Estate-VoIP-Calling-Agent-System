@@ -11,6 +11,7 @@ from twilio.rest import Client as TwilioClient
 from app.config import settings
 from app.utils.logging import get_logger
 from app.services.rag_service import RAGService
+from app.services.elevenlabs_tts import ElevenLabsTTS
 
 logger = get_logger("voip.realtime_client")
 
@@ -58,6 +59,14 @@ class RealtimeClient:
         self._last_user_utterance: Optional[str] = None
         self.awaiting_name_answer: bool = False
         self.customer_name: Optional[str] = None
+        self.tts_provider: str = (
+            "elevenlabs"
+            if settings.use_elevenlabs_tts and settings.elevenlabs_api_key and settings.elevenlabs_voice_id
+            else "azure"
+        )
+        self.eleven_tts: Optional[ElevenLabsTTS] = (
+            ElevenLabsTTS() if self.tts_provider == "elevenlabs" else None
+        )
 
     # -------------------------
     async def connect(self):
@@ -92,7 +101,6 @@ class RealtimeClient:
 
     # -------------------------
     async def update_session(self, instructions: str):
-        # Azure-specific session update matching reference logic where possible
         await self.socket.send(json.dumps({
             "type": "session.update",
             "session": {
@@ -153,10 +161,10 @@ class RealtimeClient:
         }))
         await self.socket.send(json.dumps({
             "type": "response.create",
-                "response": {
-                    "modalities": ["text", "audio"],
-                    "voice": "alloy",
-                },
+            "response": {
+                "modalities": ["text", "audio"],
+                "voice": "alloy",
+            },
         }))
         self.active_question = True
 
@@ -199,8 +207,9 @@ class RealtimeClient:
             if data.get("item_id"):
                 self.last_assistant_item = data["item_id"]
 
-            if self.send_audio_callback:
-                await self.send_audio_callback(data["delta"])
+            if self.tts_provider == "azure":
+                if self.send_audio_callback:
+                    await self.send_audio_callback(data["delta"])
 
         elif etype == "response.audio.done":
              self.assistant_speaking = False
@@ -217,6 +226,25 @@ class RealtimeClient:
                     self.awaiting_budget_answer = True
                 if "aapka naam" in lower or "apka naam" in lower or ("naam" in lower and "kya" in lower and "hai" in lower):
                     self.awaiting_name_answer = True
+                if self.tts_provider == "elevenlabs" and self.eleven_tts and self.send_audio_callback:
+                    try:
+                        start = time.time()
+                        first_sent = False
+                        async for chunk_b64 in self.eleven_tts.synthesize_ulaw_stream(transcript):
+                            if not first_sent:
+                                first_sent = True
+                                latency_ms = int((time.time() - start) * 1000)
+                                logger.info(
+                                    "elevenlabs_tts_first_chunk",
+                                    latency_ms=latency_ms,
+                                )
+                            await self.send_audio_callback(chunk_b64)
+                        if not first_sent:
+                            logger.error("elevenlabs_tts_no_audio")
+                            self.tts_provider = "azure"
+                    except Exception as e:
+                        logger.error("elevenlabs_tts_stream_failed", error=str(e))
+                        self.tts_provider = "azure"
 
         elif etype == "response.done":
             # Overall response done

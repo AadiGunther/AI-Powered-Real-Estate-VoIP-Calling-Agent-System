@@ -15,13 +15,31 @@ api.interceptors.request.use((config) => {
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
+    console.debug('API Request:', {
+        url: `${config.baseURL}${config.url}`,
+        method: config.method,
+        hasAuth: !!token,
+        params: config.params,
+    });
     return config;
 });
 
 // Handle auth errors
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        console.debug('API Response:', {
+            url: response.config.url,
+            status: response.status,
+            dataKeys: response.data ? Object.keys(response.data) : [],
+        });
+        return response;
+    },
     (error) => {
+        console.error('API Error:', {
+            url: error.config?.url,
+            status: error.response?.status,
+            detail: error.response?.data?.detail,
+        });
         if (error.response?.status === 401) {
             localStorage.removeItem('token');
             window.location.href = '/login';

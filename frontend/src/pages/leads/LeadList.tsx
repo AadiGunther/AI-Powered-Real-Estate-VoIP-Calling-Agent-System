@@ -8,6 +8,7 @@ export const LeadList: React.FC = () => {
     const [leads, setLeads] = useState<Lead[]>([]);
     const [loading, setLoading] = useState(true);
     const [total, setTotal] = useState(0);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         fetchLeads();
@@ -15,11 +16,17 @@ export const LeadList: React.FC = () => {
 
     const fetchLeads = async () => {
         try {
+            setError(null);
+            setLoading(true);
             const response = await api.get<LeadListResponse>('/leads/');
+            console.log('Fetched leads:', response.data);
             setLeads(response.data.leads);
             setTotal(response.data.total);
         } catch (error) {
             console.error('Failed to fetch leads:', error);
+            setError('Failed to load leads. Please try again.');
+            setLeads([]);
+            setTotal(0);
         } finally {
             setLoading(false);
         }
@@ -53,9 +60,17 @@ export const LeadList: React.FC = () => {
                 </button>
             </div>
 
-            {loading ? (
+            {loading && (
                 <div className="loading">Loading leads...</div>
-            ) : (
+            )}
+
+            {!loading && error && (
+                <div className="error-message">
+                    {error}
+                </div>
+            )}
+
+            {!loading && !error && (
                 <div className="card">
                     <table className="table">
                         <thead>

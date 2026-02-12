@@ -9,6 +9,7 @@ import './CallHistory.css';
 export const CallHistory: React.FC = () => {
     const [calls, setCalls] = useState<Call[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [isCallModalOpen, setIsCallModalOpen] = useState(false);
@@ -24,6 +25,7 @@ export const CallHistory: React.FC = () => {
 
     const fetchCalls = async () => {
         setLoading(true);
+        setError(null);
         try {
             const params = new URLSearchParams({
                 page: page.toString(),
@@ -37,8 +39,14 @@ export const CallHistory: React.FC = () => {
             console.log('Fetched calls:', response.data);
             setCalls(response.data.calls);
             setTotal(response.data.total);
-        } catch (error) {
-            console.error('Failed to fetch calls:', error);
+        } catch (err: any) {
+            console.error('Failed to fetch calls:', err);
+            const message =
+                err?.response?.data?.detail ||
+                'Failed to load call history. Please try again.';
+            setError(message);
+            setCalls([]);
+            setTotal(0);
         } finally {
             setLoading(false);
         }
@@ -108,9 +116,23 @@ export const CallHistory: React.FC = () => {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && (
                 <div className="loading">Loading call history...</div>
-            ) : (
+            )}
+
+            {!loading && error && (
+                <div className="error-message">
+                    {error}
+                </div>
+            )}
+
+            {!loading && !error && calls.length === 0 && (
+                <div className="empty-state">
+                    No calls found for the selected filters.
+                </div>
+            )}
+
+            {!loading && !error && calls.length > 0 && (
                 <>
                     <div className="table-container">
                         <table className="data-table">

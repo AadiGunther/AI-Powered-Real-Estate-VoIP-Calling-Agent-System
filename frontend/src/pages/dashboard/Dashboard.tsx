@@ -50,22 +50,30 @@ export const Dashboard: React.FC = () => {
     const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
     const [pendingFollowUps, setPendingFollowUps] = useState<PendingFollowUp[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const fetchData = async () => {
             try {
+                setError(null);
+                setLoading(true);
                 const [statsRes, callsRes, chartsRes, followUpsRes] = await Promise.all([
                     api.get('/api/dashboard/stats'),
                     api.get('/api/dashboard/recent-calls?limit=5'),
                     api.get('/api/dashboard/charts'),
                     api.get('/api/dashboard/pending-followups')
                 ]);
+                console.log('Dashboard stats:', statsRes.data);
+                console.log('Dashboard recent calls:', callsRes.data);
+                console.log('Dashboard charts:', chartsRes.data);
+                console.log('Dashboard pending follow-ups:', followUpsRes.data);
                 setStats(statsRes.data);
                 setRecentCalls(callsRes.data);
                 setChartData(chartsRes.data);
                 setPendingFollowUps(followUpsRes.data);
             } catch (error) {
                 console.error('Failed to fetch dashboard data:', error);
+                setError('Failed to load dashboard data. Please try again.');
             } finally {
                 setLoading(false);
             }
@@ -98,6 +106,18 @@ export const Dashboard: React.FC = () => {
 
     if (loading) {
         return <div className="dashboard-loading">Loading dashboard data...</div>;
+    }
+
+    if (error) {
+        return (
+            <div className="dashboard">
+                <div className="dashboard-header">
+                    <h1>Dashboard</h1>
+                    <p>Overview of your solar sales operations</p>
+                </div>
+                <div className="dashboard-loading">{error}</div>
+            </div>
+        );
     }
 
     return (

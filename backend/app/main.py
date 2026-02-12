@@ -17,6 +17,7 @@ setup_logging(debug=settings.debug)
 # Import routers
 from app.api.auth import router as auth_router
 from app.api.properties import router as properties_router
+from app.api.products import router as products_router
 from app.api.leads import router as leads_router
 from app.api.calls import router as calls_router
 from app.api.reports import router as reports_router
@@ -65,6 +66,7 @@ app.mount("/recordings", StaticFiles(directory=settings.recordings_dir), name="r
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(properties_router, prefix="/properties", tags=["Properties"])
+app.include_router(products_router, prefix="/products", tags=["Products"])
 app.include_router(leads_router, prefix="/leads", tags=["Leads"])
 app.include_router(calls_router, prefix="/calls", tags=["Calls"])
 app.include_router(reports_router, prefix="/reports", tags=["Reports"])

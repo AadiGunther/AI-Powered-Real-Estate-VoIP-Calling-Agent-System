@@ -7,6 +7,7 @@ import { Signup } from './pages/auth/Signup';
 import { Layout } from './components/layout/Layout';
 import { Dashboard } from './pages/dashboard/Dashboard';
 import { PropertyList } from './pages/properties/PropertyList';
+import { ProductAdmin } from './pages/admin/ProductAdmin';
 import { LeadList } from './pages/leads/LeadList';
 import { CallHistory } from './pages/calls/CallHistory';
 import { Reports } from './pages/reports/Reports';
@@ -42,6 +43,7 @@ const App: React.FC = () => {
             <Route path="/calls" element={<ProtectedRoute><CallHistory /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
+            <Route path="/admin/products" element={<ProtectedRoute><ProductAdmin /></ProtectedRoute>} />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
     );

@@ -126,11 +126,24 @@ async def list_calls(
     current_user: User = Depends(get_current_user),
 ) -> CallListResponse:
     """List calls with optional filters."""
+    logger = get_logger("api.calls")
     query = select(Call)
     
-    # Role-based filtering
-    if current_user.role == UserRole.AGENT.value:
-        query = query.where(Call.escalated_to_agent_id == current_user.id)
+    logger.info(
+        "list_calls_requested",
+        role=current_user.role,
+        page=page,
+        page_size=page_size,
+        direction=direction,
+        status=status,
+        outcome=outcome,
+        handled_by_ai=handled_by_ai,
+        escalated=escalated,
+        from_number=from_number,
+        lead_id=lead_id,
+        date_from=str(date_from) if date_from else None,
+        date_to=str(date_to) if date_to else None,
+    )
     
     # Apply filters
     if direction:
@@ -162,6 +175,12 @@ async def list_calls(
     
     result = await db.execute(query)
     calls = result.scalars().all()
+    
+    logger.info(
+        "list_calls_result",
+        total=total,
+        returned=len(calls),
+    )
     
     return CallListResponse(
         calls=[CallResponse.model_validate(call) for call in calls],
@@ -196,7 +215,12 @@ async def get_call_recording(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Get call recording URL."""
+    """Get call recording URL (admin only)."""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can access call recordings",
+        )
     result = await db.execute(select(Call).where(Call.id == call_id))
     call = result.scalar_one_or_none()
     

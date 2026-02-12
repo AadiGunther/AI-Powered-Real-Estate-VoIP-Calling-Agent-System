@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -37,12 +37,17 @@ async def list_leads(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> LeadListResponse:
-    """List leads with optional filters. Agents see only assigned leads."""
+    """List leads with optional filters. Agents see assigned and unassigned leads."""
     query = select(Lead)
     
     # Role-based filtering
     if current_user.role == UserRole.AGENT.value:
-        query = query.where(Lead.assigned_agent_id == current_user.id)
+        query = query.where(
+            or_(
+                Lead.assigned_agent_id == current_user.id,
+                Lead.assigned_agent_id == None,
+            )
+        )
     elif current_user.role == UserRole.MANAGER.value:
         # Managers see leads assigned to their agents (simplified: see unassigned + own assignments)
         pass  # Can see all for now

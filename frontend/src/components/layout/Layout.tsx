@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-    LayoutDashboard, Building2, Users, Phone, BarChart3,
+    LayoutDashboard, PanelsTopLeft, Users, Phone, BarChart3,
     Settings, LogOut, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { useAuthStore, useUIStore } from '../../store';
@@ -9,7 +9,7 @@ import './Layout.css';
 
 const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-    { path: '/properties', icon: Building2, label: 'Properties' },
+    { path: '/properties', icon: PanelsTopLeft, label: 'Products' },
     { path: '/leads', icon: Users, label: 'Leads' },
     { path: '/calls', icon: Phone, label: 'Calls' },
     { path: '/reports', icon: BarChart3, label: 'Reports' },
@@ -37,7 +37,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         <div className="layout">
             <aside className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
                 <div className="sidebar-header">
-                    <Building2 className="sidebar-logo-icon" />
+                    <PanelsTopLeft className="sidebar-logo-icon" />
                     {sidebarOpen && <span className="sidebar-logo-text">Ujjwal Energies</span>}
                 </div>
 
@@ -85,7 +85,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             <main className="main-content">
                 <header className="top-header">
                     <div className="header-left">
-                        <h1 className="page-title">Dashboard</h1>
+                        <h1 className="page-title">Ujjwal Energies Solar Console</h1>
                     </div>
                     <div className="header-right">
                         <div className="user-info">

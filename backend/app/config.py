@@ -54,9 +54,12 @@ class Settings(BaseSettings):
     cors_origins: List[str] = []
     recordings_dir: str
 
-    # ---------------- AZURE STORAGE ----------------
     azure_storage_connection_string: str = ""
     azure_storage_container_name: str = "call-recordings"
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = ""
+    elevenlabs_base_url: str = "https://api.elevenlabs.io"
+    use_elevenlabs_tts: bool = False
 
     @computed_field
     @property

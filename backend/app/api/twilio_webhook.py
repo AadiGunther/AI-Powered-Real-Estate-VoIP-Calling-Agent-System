@@ -239,8 +239,29 @@ async def handle_call_status(
         call = result.scalar_one_or_none()
         
         if call:
-            new_status = status_map.get(CallStatusParam.lower(), CallStatus.COMPLETED).value
-            call.status = new_status
+            incoming = CallStatusParam.lower()
+            new_status_enum = status_map.get(incoming, CallStatus.COMPLETED)
+            new_status = new_status_enum.value
+            
+            current_status = call.status
+            terminal_statuses = {
+                CallStatus.COMPLETED.value,
+                CallStatus.FAILED.value,
+                CallStatus.NO_ANSWER.value,
+                CallStatus.BUSY.value,
+                CallStatus.CANCELLED.value,
+            }
+            
+            # Do not downgrade from a terminal status back to in-progress/ringing/etc.
+            if current_status in terminal_statuses and new_status not in terminal_statuses:
+                logger.info(
+                    "call_status_downgrade_ignored",
+                    call_sid=CallSid,
+                    current_status=current_status,
+                    incoming_status=new_status,
+                )
+            else:
+                call.status = new_status
             
             # Set timing fields
             if new_status == CallStatus.IN_PROGRESS.value and not call.started_at:
@@ -250,9 +271,21 @@ async def handle_call_status(
                 # Should be set on creation, but just in case
                 pass
                 
+            # If Twilio sends duration, trust it for end timing
             if CallDuration:
-                call.duration_seconds = int(CallDuration)
+                try:
+                    call.duration_seconds = int(CallDuration)
+                except ValueError:
+                    logger.error("call_duration_parse_failed", raw=CallDuration, call_sid=CallSid)
                 call.ended_at = datetime.now(timezone.utc)
+            # If status is terminal but no duration provided, ensure we still set ended_at/duration
+            elif new_status in terminal_statuses:
+                if not call.ended_at:
+                    call.ended_at = datetime.now(timezone.utc)
+                if call.started_at and not call.duration_seconds:
+                    call.duration_seconds = int(
+                        (call.ended_at - call.started_at).total_seconds()
+                    )
             
             if RecordingUrl:
                 call.recording_url = RecordingUrl
@@ -307,7 +340,8 @@ async def handle_recording_status(
                     
                     if resp.status_code == 200:
                         blob_service = BlobService()
-                        file_name = f"{CallSid}_{RecordingSid or 'no_sid'}.mp3"
+                        date_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        file_name = f"{date_prefix}/{CallSid}_{RecordingSid or 'no_sid'}.mp3"
                         azure_url = await blob_service.upload_file(
                             file_data=resp.content,
                             file_name=file_name,

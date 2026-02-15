@@ -24,6 +24,8 @@ from app.api.reports import router as reports_router
 from app.api.dashboard import router as dashboard_router
 from app.api.admin import router as admin_router
 from app.api.twilio_webhook import router as twilio_router
+from app.api.elevenlabs_webhook import router as elevenlabs_router
+from app.api.notifications import router as notifications_router
 from app.voip.media_stream import router as media_stream_router
 
 
@@ -73,6 +75,8 @@ app.include_router(reports_router, prefix="/reports", tags=["Reports"])
 app.include_router(dashboard_router)
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 app.include_router(twilio_router, prefix="/twilio", tags=["Twilio"])
+app.include_router(elevenlabs_router, tags=["ElevenLabs"])
+app.include_router(notifications_router)
 app.include_router(media_stream_router, tags=["Media Stream"])
 
 

@@ -1,6 +1,7 @@
 """Authentication API endpoints."""
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -79,7 +80,7 @@ async def login(
         )
     
     # Update last login
-    user.last_login = datetime.now(timezone.utc)
+    user.last_login = datetime.now(ZoneInfo("Asia/Kolkata"))
     await db.flush()
     
     # Create access token

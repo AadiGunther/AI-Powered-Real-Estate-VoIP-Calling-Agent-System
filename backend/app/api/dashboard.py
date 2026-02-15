@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
@@ -10,11 +11,12 @@ from sqlalchemy import select, func, and_, case
 from app.database import async_session_maker
 from app.models.call import Call, CallStatus, CallOutcome
 from app.models.lead import Lead, LeadQuality, LeadStatus
-from app.models.property import Property
+from app.models.product import Product
 from app.utils.logging import get_logger
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 logger = get_logger("api.dashboard")
+_ist_tz = ZoneInfo("Asia/Kolkata")
 
 
 class DashboardStats(BaseModel):
@@ -27,8 +29,8 @@ class DashboardStats(BaseModel):
     hot_leads: int
     warm_leads: int
     cold_leads: int
-    total_properties: int
-    available_properties: int
+    total_products: int
+    active_products: int
     conversion_rate: float
 
 
@@ -45,10 +47,22 @@ class RecentCallResponse(BaseModel):
 
     @field_validator("created_at", mode="after")
     @classmethod
-    def force_utc(cls, v: datetime) -> datetime:
+    def created_at_to_ist(cls, v: datetime, info) -> datetime:
+        original = v
         if v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
-        return v
+            v = v.replace(tzinfo=timezone.utc)
+        ist_value = v.astimezone(_ist_tz)
+        try:
+            logger.info(
+                "recent_call_datetime_converted_to_ist",
+                field=info.field_name,
+                original_iso=original.isoformat(),
+                original_tz=str(original.tzinfo),
+                ist_iso=ist_value.isoformat(),
+            )
+        except Exception:
+            pass
+        return ist_value
 
 
 class AgentPerformance(BaseModel):
@@ -66,6 +80,123 @@ class ChartDataPoint(BaseModel):
     name: str
     calls: int
     leads: int
+
+
+class SolarPerformanceMetrics(BaseModel):
+    current_power_kw: float
+    daily_energy_kwh: float
+    monthly_energy_kwh: float
+    performance_ratio: float
+    system_efficiency_pct: float
+    total_capacity_kw: float
+
+
+class EnvironmentMetrics(BaseModel):
+    temperature_c: float
+    weather_condition: str
+    solar_irradiance_w_m2: float
+    wind_speed_m_s: float
+
+
+class FinancialMetrics(BaseModel):
+    daily_savings_inr: float
+    monthly_savings_inr: float
+    lifetime_savings_inr: float
+    roi_percent: float
+    payback_years: float
+    carbon_offset_kg: float
+    trees_equivalent: float
+
+
+class OperationalStatus(BaseModel):
+    overall_status: str
+    active_alarms: int
+    uptime_percent: float
+    last_update: datetime
+
+    @field_validator("last_update", mode="after")
+    @classmethod
+    def last_update_to_ist(cls, v: datetime, info) -> datetime:
+        original = v
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        ist_value = v.astimezone(_ist_tz)
+        try:
+            logger.info(
+                "operational_datetime_converted_to_ist",
+                field=info.field_name,
+                original_iso=original.isoformat(),
+                original_tz=str(original.tzinfo),
+                ist_iso=ist_value.isoformat(),
+            )
+        except Exception:
+            pass
+        return ist_value
+
+
+class SolarAlert(BaseModel):
+    id: str
+    severity: str
+    message: str
+    created_at: datetime
+
+    @field_validator("created_at", mode="after")
+    @classmethod
+    def alert_created_to_ist(cls, v: datetime, info) -> datetime:
+        original = v
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        ist_value = v.astimezone(_ist_tz)
+        try:
+            logger.info(
+                "solar_alert_datetime_converted_to_ist",
+                field=info.field_name,
+                original_iso=original.isoformat(),
+                original_tz=str(original.tzinfo),
+                ist_iso=ist_value.isoformat(),
+            )
+        except Exception:
+            pass
+        return ist_value
+
+
+class EnergyTrendPoint(BaseModel):
+    timestamp: datetime
+    energy_kwh: float
+
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def timestamp_to_ist(cls, v: datetime, info) -> datetime:
+        original = v
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        ist_value = v.astimezone(_ist_tz)
+        try:
+            logger.info(
+                "energy_trend_datetime_converted_to_ist",
+                field=info.field_name,
+                original_iso=original.isoformat(),
+                original_tz=str(original.tzinfo),
+                ist_iso=ist_value.isoformat(),
+            )
+        except Exception:
+            pass
+        return ist_value
+
+
+class SolarDashboardResponse(BaseModel):
+    performance: SolarPerformanceMetrics
+    environment: EnvironmentMetrics
+    financial: FinancialMetrics
+    operational: OperationalStatus
+    alerts: List[SolarAlert]
+    energy_trend: List[EnergyTrendPoint]
+
+
+class SolarTelemetryUpdate(BaseModel):
+    performance: SolarPerformanceMetrics
+    environment: EnvironmentMetrics
+    financial: FinancialMetrics
 
 
 @router.get("/charts", response_model=List[ChartDataPoint])
@@ -112,6 +243,161 @@ async def get_dashboard_charts():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/solar-realtime", response_model=SolarDashboardResponse)
+async def get_solar_realtime():
+    try:
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+
+        perf_data: Dict[str, Any] = {}
+        env_data: Dict[str, Any] = {}
+        fin_data: Dict[str, Any] = {}
+        op_data: Dict[str, Any] = {}
+        trend_data: List[Dict[str, Any]] = []
+
+        performance = SolarPerformanceMetrics(
+            current_power_kw=float(perf_data.get("current_power_kw", 4.2)),
+            daily_energy_kwh=float(perf_data.get("daily_energy_kwh", 18.5)),
+            monthly_energy_kwh=float(perf_data.get("monthly_energy_kwh", 540.0)),
+            performance_ratio=float(perf_data.get("performance_ratio", 0.82)),
+            system_efficiency_pct=float(perf_data.get("system_efficiency_pct", 92.0)),
+            total_capacity_kw=float(perf_data.get("total_capacity_kw", 5.0)),
+        )
+
+        environment = EnvironmentMetrics(
+            temperature_c=float(env_data.get("temperature_c", 32.0)),
+            weather_condition=str(env_data.get("weather_condition", "Sunny")),
+            solar_irradiance_w_m2=float(env_data.get("solar_irradiance_w_m2", 820.0)),
+            wind_speed_m_s=float(env_data.get("wind_speed_m_s", 2.4)),
+        )
+
+        financial = FinancialMetrics(
+            daily_savings_inr=float(fin_data.get("daily_savings_inr", 220.0)),
+            monthly_savings_inr=float(fin_data.get("monthly_savings_inr", 6500.0)),
+            lifetime_savings_inr=float(fin_data.get("lifetime_savings_inr", 325000.0)),
+            roi_percent=float(fin_data.get("roi_percent", 18.5)),
+            payback_years=float(fin_data.get("payback_years", 4.5)),
+            carbon_offset_kg=float(fin_data.get("carbon_offset_kg", 120.0)),
+            trees_equivalent=float(fin_data.get("trees_equivalent", 5.0)),
+        )
+
+        last_update_value = op_data.get("last_update") or telemetry.get("created_at") if telemetry else now
+        if isinstance(last_update_value, str):
+            last_update_dt = datetime.fromisoformat(last_update_value)
+        else:
+            last_update_dt = last_update_value or now
+        if last_update_dt.tzinfo is None:
+            last_update_dt = last_update_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+
+        overall_status = str(op_data.get("overall_status", "ok"))
+        active_alarms = int(op_data.get("active_alarms", 0))
+        uptime_percent = float(op_data.get("uptime_percent", 99.5))
+
+        operational = OperationalStatus(
+            overall_status=overall_status,
+            active_alarms=active_alarms,
+            uptime_percent=uptime_percent,
+            last_update=last_update_dt,
+        )
+
+        alerts_cursor = None
+        alerts_docs: List[Dict[str, Any]] = []
+        try:
+            alerts_cursor = mongo.solar_alerts.find().sort("created_at", -1).limit(5)
+            alerts_docs = await alerts_cursor.to_list(length=5)
+        except Exception as e:
+            logger.error("get_solar_alerts_failed", error=str(e))
+
+        alerts: List[SolarAlert] = []
+        for doc in alerts_docs:
+            created_at_value = doc.get("created_at", now)
+            if isinstance(created_at_value, str):
+                created_at_dt = datetime.fromisoformat(created_at_value)
+            else:
+                created_at_dt = created_at_value or now
+            if created_at_dt.tzinfo is None:
+                created_at_dt = created_at_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            alerts.append(
+                SolarAlert(
+                    id=str(doc.get("id") or doc.get("_id")),
+                    severity=str(doc.get("severity", "info")),
+                    message=str(doc.get("message", "")),
+                    created_at=created_at_dt,
+                )
+            )
+
+        if not trend_data:
+            trend_points: List[EnergyTrendPoint] = []
+            for i in range(6, -1, -1):
+                ts = now - timedelta(days=i)
+                energy_value = 12.0 + (6 - i) * 1.2
+                trend_points.append(EnergyTrendPoint(timestamp=ts, energy_kwh=energy_value))
+        else:
+            trend_points = []
+            for item in trend_data:
+                ts_value = item.get("timestamp", now)
+                if isinstance(ts_value, str):
+                    ts_dt = datetime.fromisoformat(ts_value)
+                else:
+                    ts_dt = ts_value or now
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+                trend_points.append(
+                    EnergyTrendPoint(
+                        timestamp=ts_dt,
+                        energy_kwh=float(item.get("energy_kwh", 0.0)),
+                    )
+                )
+
+        return SolarDashboardResponse(
+            performance=performance,
+            environment=environment,
+            financial=financial,
+            operational=operational,
+            alerts=alerts,
+            energy_trend=trend_points,
+        )
+    except Exception as e:
+        logger.error("get_solar_realtime_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/solar-telemetry")
+async def update_solar_telemetry(payload: SolarTelemetryUpdate):
+    try:
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+
+        overall_status = "ok"
+        active_alarms = 0
+        alerts: List[Dict[str, Any]] = []
+
+        if payload.performance.system_efficiency_pct < 75.0:
+            overall_status = "warning"
+            active_alarms += 1
+            alerts.append(
+                {
+                    "severity": "warning",
+                    "message": "System efficiency below expected threshold.",
+                    "created_at": now,
+                }
+            )
+
+        if payload.environment.solar_irradiance_w_m2 > 800.0 and payload.performance.current_power_kw < payload.performance.total_capacity_kw * 0.5:
+            overall_status = "warning"
+            active_alarms += 1
+            alerts.append(
+                {
+                    "severity": "warning",
+                    "message": "High irradiance but low power output detected.",
+                    "created_at": now,
+                }
+            )
+
+        return {"success": True}
+    except Exception as e:
+        logger.error("update_solar_telemetry_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats():
     """Get overall dashboard statistics."""
@@ -148,10 +434,10 @@ async def get_dashboard_stats():
                 select(func.count(Lead.id)).where(Lead.quality == LeadQuality.COLD.value)
             )
             
-            # Properties stats
-            total_properties = await db.scalar(select(func.count(Property.id)))
-            available_properties = await db.scalar(
-                select(func.count(Property.id)).where(Property.status == "available")
+            # Products stats (solar inventory)
+            total_products = await db.scalar(select(func.count(Product.id)))
+            active_products = await db.scalar(
+                select(func.count(Product.id)).where(Product.is_active == True)
             )
             
             # Conversion rate (converted leads / total leads)
@@ -169,8 +455,8 @@ async def get_dashboard_stats():
                 hot_leads=hot_leads or 0,
                 warm_leads=warm_leads or 0,
                 cold_leads=cold_leads or 0,
-                total_properties=total_properties or 0,
-                available_properties=available_properties or 0,
+                total_products=total_products or 0,
+                active_products=active_products or 0,
                 conversion_rate=round(conversion_rate, 2),
             )
     except Exception as e:

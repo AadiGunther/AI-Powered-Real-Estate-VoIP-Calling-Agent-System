@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = ""
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
     use_elevenlabs_tts: bool = False
+    elevenlabs_tools_api_key: str = ""
+    elevenlabs_webhook_secret: str = ""
+    enable_existing_outbound_flow: bool = False
 
     @computed_field
     @property

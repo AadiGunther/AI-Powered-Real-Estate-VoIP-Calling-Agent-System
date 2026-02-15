@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
     LayoutDashboard, PanelsTopLeft, Users, Phone, BarChart3,
-    Settings, LogOut, ChevronLeft, ChevronRight
+    Settings, LogOut, ChevronLeft, ChevronRight, Bell
 } from 'lucide-react';
-import { useAuthStore, useUIStore } from '../../store';
+import { useAuthStore, useUIStore, useNotificationStore } from '../../store';
+import { fetchNotifications, fetchUnreadCount, connectNotificationWebSocket, disconnectNotificationWebSocket, markNotificationRead } from '../../services/notifications';
 import './Layout.css';
 
 const navItems = [
@@ -27,10 +28,29 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     const navigate = useNavigate();
     const { user, logout } = useAuthStore();
     const { sidebarOpen, toggleSidebar } = useUIStore();
+    const { items, unreadCount } = useNotificationStore();
+    const [dropdownOpen, setDropdownOpen] = useState(false);
 
     const handleLogout = () => {
+        disconnectNotificationWebSocket();
         logout();
         navigate('/login');
+    };
+
+    useEffect(() => {
+        if (!user) {
+            return;
+        }
+        fetchNotifications().catch(() => {});
+        fetchUnreadCount().catch(() => {});
+        connectNotificationWebSocket();
+        return () => {
+            disconnectNotificationWebSocket();
+        };
+    }, [user]);
+
+    const handleNotificationClick = (id: number) => {
+        markNotificationRead(id).catch(() => {});
     };
 
     return (
@@ -88,6 +108,38 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                         <h1 className="page-title">Ujjwal Energies Solar Console</h1>
                     </div>
                     <div className="header-right">
+                        <div className="notification-bell">
+                            <button
+                                className="icon-button"
+                                onClick={() => setDropdownOpen((open) => !open)}
+                            >
+                                <Bell size={20} />
+                                {unreadCount > 0 && (
+                                    <span className="notification-badge">
+                                        {unreadCount > 9 ? '9+' : unreadCount}
+                                    </span>
+                                )}
+                            </button>
+                            {dropdownOpen && (
+                                <div className="notification-dropdown">
+                                    {items.length === 0 && (
+                                        <div className="notification-empty">No notifications</div>
+                                    )}
+                                    {items.map((notification) => (
+                                        <button
+                                            key={notification.id}
+                                            className={`notification-item ${notification.is_read ? 'read' : ''}`}
+                                            onClick={() => handleNotificationClick(notification.id)}
+                                        >
+                                            <div className="notification-message">{notification.message}</div>
+                                            <div className="notification-meta">
+                                                <span className="notification-type">{notification.type.replace(/_/g, ' ')}</span>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                         <div className="user-info">
                             <span className="user-name">{user?.full_name}</span>
                             <span className="user-role">{user?.role}</span>

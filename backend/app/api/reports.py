@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func, and_
@@ -11,7 +12,7 @@ from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.call import Call, CallStatus, CallOutcome
 from app.models.lead import Lead, LeadStatus, LeadQuality
-from app.models.property import Property, PropertyStatus
+from app.models.product import Product
 from app.utils.security import get_current_user, require_manager
 
 router = APIRouter()
@@ -23,7 +24,9 @@ async def get_dashboard_summary(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Get dashboard summary statistics."""
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     week_ago = today - timedelta(days=7)
     month_ago = today - timedelta(days=30)
     
@@ -43,14 +46,9 @@ async def get_dashboard_summary(
         select(func.count(Lead.id)).where(Lead.quality == LeadQuality.HOT.value)
     )
     
-    # Active properties
-    active_properties = await db.execute(
-        select(func.count(Property.id)).where(
-            and_(
-                Property.is_active == True,
-                Property.status == PropertyStatus.AVAILABLE.value
-            )
-        )
+    # Active products
+    active_products = await db.execute(
+        select(func.count(Product.id)).where(Product.is_active == True)
     )
     
     # Conversion rate (leads converted / total leads)
@@ -76,8 +74,8 @@ async def get_dashboard_summary(
             "total": total_leads_count,
             "hot": hot_leads.scalar() or 0,
         },
-        "properties": {
-            "active": active_properties.scalar() or 0,
+        "products": {
+            "active": active_products.scalar() or 0,
         },
         "metrics": {
             "conversion_rate": round(conversion_rate, 2),
@@ -95,9 +93,9 @@ async def get_call_analytics(
 ) -> dict:
     """Get call analytics report."""
     if not date_from:
-        date_from = datetime.now(timezone.utc) - timedelta(days=30)
+        date_from = datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=30)
     if not date_to:
-        date_to = datetime.now(timezone.utc)
+        date_to = datetime.now(ZoneInfo("Asia/Kolkata"))
     
     date_filter = and_(Call.created_at >= date_from, Call.created_at <= date_to)
     
@@ -179,9 +177,9 @@ async def get_agent_performance(
 ) -> dict:
     """Get agent performance report."""
     if not date_from:
-        date_from = datetime.now(timezone.utc) - timedelta(days=30)
+        date_from = datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=30)
     if not date_to:
-        date_to = datetime.now(timezone.utc)
+        date_to = datetime.now(ZoneInfo("Asia/Kolkata"))
     
     # Get all agents
     agents_result = await db.execute(
@@ -248,9 +246,9 @@ async def get_lead_analytics(
 ) -> dict:
     """Get lead analytics report."""
     if not date_from:
-        date_from = datetime.now(timezone.utc) - timedelta(days=30)
+        date_from = datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=30)
     if not date_to:
-        date_to = datetime.now(timezone.utc)
+        date_to = datetime.now(ZoneInfo("Asia/Kolkata"))
     
     date_filter = and_(Lead.created_at >= date_from, Lead.created_at <= date_to)
     

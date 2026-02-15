@@ -11,13 +11,16 @@ from app.config import settings
 from app.database import get_db
 from app.models.product import Product, ProductType
 from app.models.user import User
+from app.models.audit_log import AuditLog, AuditAction
+from app.models.notification import NotificationType
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
     ProductResponse,
     ProductListResponse,
 )
-from app.utils.security import get_current_user, require_manager
+from app.services.notification_service import NotificationService
+from app.utils.security import get_current_user, require_admin
 
 router = APIRouter()
 
@@ -92,7 +95,7 @@ async def list_products(
 async def create_product(
     request: ProductCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_manager),
+    current_user: User = Depends(require_admin),
 ) -> ProductResponse:
     images_json = json.dumps(request.images) if request.images else None
 
@@ -120,6 +123,22 @@ async def create_product(
     await db.flush()
     await db.refresh(product)
 
+    notification_service = NotificationService(db)
+    await notification_service.create_notification(
+        user_id=current_user.id,
+        message=f"Product created: {product.name}",
+        notification_type=NotificationType.PRODUCT_CREATED,
+    )
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.PRODUCT_CREATED.value,
+        entity_type="product",
+        entity_id=product.id,
+        payload=json.dumps({"name": product.name}),
+    )
+    db.add(audit)
+
     return product_to_response(product)
 
 
@@ -145,7 +164,7 @@ async def update_product(
     product_id: int,
     request: ProductUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_manager),
+    current_user: User = Depends(require_admin),
 ) -> ProductResponse:
     result = await db.execute(select(Product).where(Product.id == product_id))
     product = result.scalar_one_or_none()
@@ -168,6 +187,22 @@ async def update_product(
     await db.flush()
     await db.refresh(product)
 
+    notification_service = NotificationService(db)
+    await notification_service.create_notification(
+        user_id=current_user.id,
+        message=f"Product updated: {product.name}",
+        notification_type=NotificationType.PRODUCT_UPDATED,
+    )
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.PRODUCT_UPDATED.value,
+        entity_type="product",
+        entity_id=product.id,
+        payload=json.dumps({"name": product.name}),
+    )
+    db.add(audit)
+
     return product_to_response(product)
 
 
@@ -175,7 +210,7 @@ async def update_product(
 async def delete_product(
     product_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_manager),
+    current_user: User = Depends(require_admin),
 ) -> None:
     result = await db.execute(select(Product).where(Product.id == product_id))
     product = result.scalar_one_or_none()
@@ -189,11 +224,27 @@ async def delete_product(
     product.is_active = False
     await db.flush()
 
+    notification_service = NotificationService(db)
+    await notification_service.create_notification(
+        user_id=current_user.id,
+        message=f"Product deleted: {product.name}",
+        notification_type=NotificationType.PRODUCT_DELETED,
+    )
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.PRODUCT_DELETED.value,
+        entity_type="product",
+        entity_id=product.id,
+        payload=json.dumps({"name": product.name}),
+    )
+    db.add(audit)
+
 
 @router.post("/upload-image", response_model=dict)
 async def upload_product_image(
     file: UploadFile = File(...),
-    current_user: User = Depends(require_manager),
+    current_user: User = Depends(require_admin),
 ) -> dict:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
@@ -212,4 +263,3 @@ async def upload_product_image(
         f.write(contents)
 
     return {"url": f"/static/{filename}"}
-

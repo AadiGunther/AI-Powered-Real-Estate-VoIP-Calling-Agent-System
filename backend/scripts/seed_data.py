@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import delete, select
 
-from app.database import async_session_maker, init_db, MongoDB
+from app.database import async_session_maker, init_db
 from app.models.user import User, UserRole
 from app.models.property import Property, PropertyType, PropertyStatus
 from app.models.lead import Lead, LeadSource, LeadQuality, LeadStatus
@@ -393,7 +393,6 @@ async def main():
     
     # Initialize database
     await init_db()
-    await MongoDB.connect()
     
     try:
         await seed_users()
@@ -414,7 +413,7 @@ async def main():
         traceback.print_exc()
         raise
     finally:
-        await MongoDB.disconnect()
+        pass
 
 
 if __name__ == "__main__":

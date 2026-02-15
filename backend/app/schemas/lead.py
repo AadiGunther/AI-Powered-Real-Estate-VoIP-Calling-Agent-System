@@ -1,11 +1,17 @@
 """Lead schemas for request/response validation."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.models.lead import LeadQuality, LeadStatus, LeadSource
+from app.utils.logging import get_logger
+
+
+_ist_tz = ZoneInfo("Asia/Kolkata")
+_lead_schema_logger = get_logger("schemas.lead")
 
 
 class LeadBase(BaseModel):
@@ -89,6 +95,35 @@ class LeadResponse(LeadBase):
 
     class Config:
         from_attributes = True
+
+    @field_validator(
+        "created_at",
+        "updated_at",
+        "assigned_at",
+        "next_follow_up",
+        "converted_at",
+        "last_contacted_at",
+        mode="after",
+    )
+    @classmethod
+    def to_ist(cls, v: Optional[datetime], info) -> Optional[datetime]:
+        if v is None:
+            return None
+        original = v
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        ist_value = v.astimezone(_ist_tz)
+        try:
+            _lead_schema_logger.info(
+                "lead_datetime_converted_to_ist",
+                field=info.field_name,
+                original_iso=original.isoformat(),
+                original_tz=str(original.tzinfo),
+                ist_iso=ist_value.isoformat(),
+            )
+        except Exception:
+            pass
+        return ist_value
 
 
 class LeadSearchParams(BaseModel):

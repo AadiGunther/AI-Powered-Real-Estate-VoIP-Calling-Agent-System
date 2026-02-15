@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -57,7 +58,7 @@ async def get_current_user(
         )
     
     # Update last login
-    user.last_login = datetime.now(timezone.utc)
+    user.last_login = datetime.now(ZoneInfo("Asia/Kolkata"))
     await db.commit()
     
     return user

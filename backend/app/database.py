@@ -1,29 +1,26 @@
-"""Database connections for SQLite and MongoDB."""
+"""Database connections for SQLite."""
 
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from sqlalchemy import text, inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 
 
-# SQLAlchemy Base
 class Base(DeclarativeBase):
-    """Base class for SQLAlchemy models."""
     pass
 
 
-# SQLite AsyncEngine
 engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
     future=True,
 )
 
-# Session factory
+
 async_session_maker = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -33,8 +30,40 @@ async_session_maker = async_sessionmaker(
 )
 
 
+def _migrate_calls_table(connection) -> None:
+    inspector = sa_inspect(connection)
+    try:
+        columns = {col["name"] for col in inspector.get_columns("calls")}
+    except Exception:
+        return
+
+    if "webhook_processed_at" not in columns:
+        dialect = connection.dialect.name
+        try:
+            if dialect == "sqlite":
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN webhook_processed_at DATETIME")
+                )
+            elif dialect == "postgresql":
+                connection.execute(
+                    text(
+                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS webhook_processed_at TIMESTAMPTZ"
+                    )
+                )
+            else:
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN webhook_processed_at TIMESTAMP")
+                )
+        except Exception:
+            return
+
+
+def _init_and_migrate(connection) -> None:
+    Base.metadata.create_all(connection)
+    _migrate_calls_table(connection)
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Dependency to get database session."""
     async with async_session_maker() as session:
         try:
             yield session
@@ -46,51 +75,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
-# MongoDB Client
-class MongoDB:
-    """MongoDB connection manager."""
-
-    client: Optional[AsyncIOMotorClient] = None
-    db: Optional[AsyncIOMotorDatabase] = None
-
-    @classmethod
-    async def connect(cls) -> None:
-        """Connect to MongoDB."""
-        cls.client = AsyncIOMotorClient(settings.mongodb_url)
-        cls.db = cls.client[settings.mongodb_db]
-
-    @classmethod
-    async def disconnect(cls) -> None:
-        """Disconnect from MongoDB."""
-        if cls.client:
-            cls.client.close()
-
-    @classmethod
-    def get_db(cls) -> AsyncIOMotorDatabase:
-        """Get MongoDB database instance."""
-        if cls.db is None:
-            raise RuntimeError("MongoDB not connected. Call MongoDB.connect() first.")
-        return cls.db
-
-
-def get_mongodb() -> AsyncIOMotorDatabase:
-    """Dependency to get MongoDB database."""
-    return MongoDB.get_db()
-
-
 async def init_db() -> None:
-    """Initialize database tables."""
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_init_and_migrate)
 
 
 @asynccontextmanager
 async def lifespan_db():
-    """Database lifespan context manager."""
-    # Startup
     await init_db()
-    await MongoDB.connect()
     yield
-    # Shutdown
-    await MongoDB.disconnect()
     await engine.dispose()

@@ -1,7 +1,9 @@
 """Leads API endpoints."""
 
 from datetime import datetime, timezone
+import json
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func, and_, or_
@@ -10,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.lead import Lead, LeadQuality, LeadStatus
+from app.models.notification import NotificationType
+from app.models.audit_log import AuditLog, AuditAction
 from app.schemas.lead import (
     LeadCreate,
     LeadUpdate,
@@ -19,6 +23,7 @@ from app.schemas.lead import (
     LeadStatusUpdate,
     LeadAssign,
 )
+from app.services.notification_service import NotificationService
 from app.utils.security import get_current_user, require_manager
 
 router = APIRouter()
@@ -119,7 +124,22 @@ async def create_lead(
     db.add(lead)
     await db.flush()
     await db.refresh(lead)
-    
+
+    notification_service = NotificationService(db)
+    result_users = await db.execute(
+        select(User).where(
+            User.role.in_([UserRole.ADMIN.value, UserRole.MANAGER.value])
+        )
+    )
+    managers = result_users.scalars().all()
+    for manager in managers:
+        await notification_service.create_notification(
+            user_id=manager.id,
+            message=f"New lead created with phone {lead.phone}",
+            notification_type=NotificationType.LEAD_CREATED,
+            related_lead_id=lead.id,
+        )
+
     return lead
 
 
@@ -224,16 +244,29 @@ async def update_lead_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Lead not found",
         )
-    
+
+    old_status = lead.status
     lead.status = request.status.value
     
     # Mark conversion time if converted
     if request.status == LeadStatus.CONVERTED:
-        lead.converted_at = datetime.now(timezone.utc)
-    
+        lead.converted_at = datetime.now(ZoneInfo("Asia/Kolkata"))
+
     await db.flush()
     await db.refresh(lead)
-    
+
+    if lead.assigned_agent_id is not None and old_status != lead.status:
+        notification_service = NotificationService(db)
+        await notification_service.create_notification(
+            user_id=lead.assigned_agent_id,
+            message=(
+                f"Lead {lead.phone} status changed from "
+                f"{old_status} to {lead.status}"
+            ),
+            notification_type=NotificationType.LEAD_STATUS_CHANGED,
+            related_lead_id=lead.id,
+        )
+
     return lead
 
 
@@ -263,11 +296,35 @@ async def assign_lead(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent not found",
         )
-    
+
+    previous_agent_id = lead.assigned_agent_id
     lead.assigned_agent_id = request.agent_id
-    lead.assigned_at = datetime.now(timezone.utc)
-    
+    lead.assigned_at = datetime.now(ZoneInfo("Asia/Kolkata"))
+
     await db.flush()
     await db.refresh(lead)
-    
+
+    notification_service = NotificationService(db)
+    await notification_service.create_notification(
+        user_id=agent.id,
+        message=f"You have been assigned lead {lead.phone}",
+        notification_type=NotificationType.LEAD_ASSIGNED,
+        related_lead_id=lead.id,
+    )
+
+    audit_payload = json.dumps(
+        {
+            "previous_agent_id": previous_agent_id,
+            "new_agent_id": request.agent_id,
+        }
+    )
+    audit = AuditLog(
+        user_id=current_user.id,
+        action=AuditAction.LEAD_ASSIGNED.value,
+        entity_type="lead",
+        entity_id=lead.id,
+        payload=audit_payload,
+    )
+    db.add(audit)
+
     return lead

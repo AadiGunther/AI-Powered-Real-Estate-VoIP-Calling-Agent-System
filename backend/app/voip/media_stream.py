@@ -10,6 +10,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.database import async_session_maker
 from app.models.call import Call, CallStatus
@@ -56,7 +57,7 @@ async def media_stream_websocket(websocket: WebSocket):
                         if call:
                             call.status = CallStatus.IN_PROGRESS.value
                             if not call.started_at:
-                                call.started_at = datetime.now(timezone.utc)
+                                call.started_at = datetime.now(ZoneInfo("Asia/Kolkata"))
                             await db.commit()
                 except Exception as e:
                     logger.error("call_start_update_failed", error=str(e), call_sid=call_sid)
@@ -136,7 +137,7 @@ async def media_stream_websocket(websocket: WebSocket):
                     call = result.scalar_one_or_none()
                     if call and call.status not in [CallStatus.COMPLETED.value, CallStatus.FAILED.value]:
                         call.status = CallStatus.COMPLETED.value
-                        call.ended_at = datetime.now(timezone.utc)
+                        call.ended_at = datetime.now(ZoneInfo("Asia/Kolkata"))
                         if call.started_at:
                             call.duration_seconds = int((call.ended_at - call.started_at).total_seconds())
                         await db.commit()

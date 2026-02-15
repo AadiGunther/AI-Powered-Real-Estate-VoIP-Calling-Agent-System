@@ -13,8 +13,8 @@ interface DashboardStats {
     hot_leads: number;
     warm_leads: number;
     cold_leads: number;
-    total_properties: number;
-    available_properties: number;
+    total_products: number;
+    active_products: number;
     conversion_rate: number;
 }
 
@@ -155,9 +155,9 @@ export const Dashboard: React.FC = () => {
                         <Building2 size={24} />
                     </div>
                     <div className="stat-content">
-                        <span className="stat-label">Active Properties</span>
-                        <span className="stat-value">{stats?.available_properties || 0}</span>
-                        <span className="stat-change neutral">{stats?.total_properties || 0} total listings</span>
+                        <span className="stat-label">Active Products</span>
+                        <span className="stat-value">{stats?.active_products || 0}</span>
+                        <span className="stat-change neutral">{stats?.total_products || 0} total products</span>
                     </div>
                 </div>
 

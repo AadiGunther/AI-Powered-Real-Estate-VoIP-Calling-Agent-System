@@ -2,14 +2,15 @@
 
 from datetime import datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Request, Response, Query, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from twilio.twiml.voice_response import VoiceResponse, Connect
+from twilio.twiml.voice_response import VoiceResponse, Connect, Dial
 
 from app.config import settings
-from app.database import get_db, get_mongodb
+from app.database import get_db
 from app.models.call import Call, CallDirection, CallStatus
 from app.models.lead import Lead, LeadSource, LeadQuality, LeadStatus
 from app.utils.logging import get_logger
@@ -61,7 +62,7 @@ async def handle_incoming_call(
                 to_number=To,
                 direction=CallDirection.INBOUND.value if Direction == "inbound" else CallDirection.OUTBOUND.value,
                 status=CallStatus.RINGING.value,
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.now(ZoneInfo("Asia/Kolkata")),
                 handled_by_ai=True,
             )
             db.add(call)
@@ -72,7 +73,7 @@ async def handle_incoming_call(
             call.direction = CallDirection.INBOUND.value if Direction == "inbound" else CallDirection.OUTBOUND.value
             call.status = CallStatus.RINGING.value
             if call.started_at is None:
-                call.started_at = datetime.now(timezone.utc)
+                call.started_at = datetime.now(ZoneInfo("Asia/Kolkata"))
             await db.flush()
         
         # Check if lead exists, create if not
@@ -92,32 +93,6 @@ async def handle_incoming_call(
         
         call.lead_id = lead.id
         await db.flush()
-        
-        # Initialize transcript in MongoDB
-        mongodb = get_mongodb()
-        await mongodb.transcripts.insert_one({
-            "call_sid": CallSid,
-            "call_id": call.id,
-            "lead_id": lead.id,
-            "messages": [],
-            "created_at": datetime.now(timezone.utc),
-        })
-        
-        # Start recording via API
-        async def start_twilio_recording():
-            try:
-                client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
-                await asyncio.to_thread(
-                    lambda: client.calls(CallSid).update(
-                        record=True,
-                        recording_status_callback=f"{settings.base_url}/twilio/recording",
-                        recording_status_callback_method="POST"
-                    )
-                )
-            except Exception as e:
-                logger.error("start_recording_failed", error=str(e), call_sid=CallSid)
-        
-        asyncio.create_task(start_twilio_recording())
 
         # Generate TwiML response with media stream
         response = VoiceResponse()
@@ -202,128 +177,88 @@ async def handle_outbound_call(
         traceback.print_exc()
         logger.error("outbound_webhook_failed", error=str(e), call_sid=CallSid)
         raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/status")
-async def handle_call_status(
+        
+@router.post("/call-status")
+async def handle_call_status_recording(
     CallSid: str = Form(..., alias="CallSid"),
     CallStatusParam: str = Form(..., alias="CallStatus"),
-    CallDuration: Optional[str] = Form(None, alias="CallDuration"),
-    RecordingUrl: Optional[str] = Form(None, alias="RecordingUrl"),
-    RecordingSid: Optional[str] = Form(None, alias="RecordingSid"),
-    RecordingDuration: Optional[str] = Form(None, alias="RecordingDuration"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Handle Twilio call status webhook."""
+    """
+    Handle Twilio status callback and start recording when call is in-progress or answered.
+    """
     try:
         logger.info(
-            "call_status_update",
+            "call_status_event",
             call_sid=CallSid,
             status=CallStatusParam,
-            duration=CallDuration,
         )
-        
-        # Map Twilio status to our status
-        status_map = {
-            "initiated": CallStatus.INITIATED,
-            "ringing": CallStatus.RINGING,
-            "in-progress": CallStatus.IN_PROGRESS,
-            "completed": CallStatus.COMPLETED,
-            "failed": CallStatus.FAILED,
-            "busy": CallStatus.BUSY,
-            "no-answer": CallStatus.NO_ANSWER,
-            "canceled": CallStatus.CANCELLED,
-        }
-        
-        # Update call record
+
+        status_lower = CallStatusParam.lower()
+        if status_lower not in ("in-progress", "answered"):
+            return {"status": "ignored"}
+
         result = await db.execute(select(Call).where(Call.call_sid == CallSid))
         call = result.scalar_one_or_none()
-        
+
+        if call and call.recording_sid:
+            logger.info(
+                "recording_already_started",
+                call_sid=CallSid,
+                recording_sid=call.recording_sid,
+            )
+            return {"status": "already_recording"}
+
+        client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
+
+        def create_recording():
+            return client.calls(CallSid).recordings.create(
+                recording_channels="dual",
+                recording_status_callback=f"{settings.base_url}/twilio/recording-status",
+            )
+
+        recording = await asyncio.to_thread(create_recording)
+
         if call:
-            incoming = CallStatusParam.lower()
-            new_status_enum = status_map.get(incoming, CallStatus.COMPLETED)
-            new_status = new_status_enum.value
-            
-            current_status = call.status
-            terminal_statuses = {
-                CallStatus.COMPLETED.value,
-                CallStatus.FAILED.value,
-                CallStatus.NO_ANSWER.value,
-                CallStatus.BUSY.value,
-                CallStatus.CANCELLED.value,
-            }
-            
-            # Do not downgrade from a terminal status back to in-progress/ringing/etc.
-            if current_status in terminal_statuses and new_status not in terminal_statuses:
-                logger.info(
-                    "call_status_downgrade_ignored",
-                    call_sid=CallSid,
-                    current_status=current_status,
-                    incoming_status=new_status,
-                )
-            else:
-                call.status = new_status
-            
-            # Set timing fields
-            if new_status == CallStatus.IN_PROGRESS.value and not call.started_at:
-                call.started_at = datetime.now(timezone.utc)
-            
-            if new_status == CallStatus.RINGING.value and not call.created_at:
-                # Should be set on creation, but just in case
-                pass
-                
-            # If Twilio sends duration, trust it for end timing
-            if CallDuration:
-                try:
-                    call.duration_seconds = int(CallDuration)
-                except ValueError:
-                    logger.error("call_duration_parse_failed", raw=CallDuration, call_sid=CallSid)
-                call.ended_at = datetime.now(timezone.utc)
-            # If status is terminal but no duration provided, ensure we still set ended_at/duration
-            elif new_status in terminal_statuses:
-                if not call.ended_at:
-                    call.ended_at = datetime.now(timezone.utc)
-                if call.started_at and not call.duration_seconds:
-                    call.duration_seconds = int(
-                        (call.ended_at - call.started_at).total_seconds()
-                    )
-            
-            if RecordingUrl:
-                call.recording_url = RecordingUrl
-                call.recording_sid = RecordingSid
-                if RecordingDuration:
-                    call.recording_duration = int(RecordingDuration)
-            
+            call.recording_sid = recording.sid
             await db.flush()
-        
-        return {"status": "processed"}
+
+        logger.info(
+            "recording_started",
+            call_sid=CallSid,
+            recording_sid=recording.sid,
+        )
+        return {"status": "recording_started"}
     except Exception as e:
         import traceback
         traceback.print_exc()
-        logger.error("status_webhook_failed", error=str(e), call_sid=CallSid)
+        logger.error("call_status_recording_failed", error=str(e), call_sid=CallSid)
         return {"status": "error", "message": str(e)}
 
 
-
-@router.post("/recording")
-async def handle_recording_status(
+@router.post("/recording-status")
+async def handle_recording_status_event(
     CallSid: str = Form(..., alias="CallSid"),
-    RecordingUrl: Optional[str] = Form(None, alias="RecordingUrl"),
     RecordingSid: Optional[str] = Form(None, alias="RecordingSid"),
+    RecordingUrl: Optional[str] = Form(None, alias="RecordingUrl"),
     RecordingDuration: Optional[str] = Form(None, alias="RecordingDuration"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Handle Twilio recording status webhook."""
+    """
+    Handle Twilio recording status callback for logging and basic persistence.
+    """
     try:
         logger.info(
-            "recording_complete",
+            "recording_status_event",
             call_sid=CallSid,
             recording_sid=RecordingSid,
+            recording_url=RecordingUrl,
             duration=RecordingDuration,
         )
-        
+
         result = await db.execute(select(Call).where(Call.call_sid == CallSid))
         call = result.scalar_one_or_none()
-        
+
         if call and RecordingUrl:
             azure_url = None
             try:
@@ -337,35 +272,41 @@ async def handle_recording_status(
                             settings.twilio_auth_token,
                         ),
                     )
-                    
+
                     if resp.status_code == 200:
                         blob_service = BlobService()
-                        date_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        date_prefix = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
                         file_name = f"{date_prefix}/{CallSid}_{RecordingSid or 'no_sid'}.mp3"
                         azure_url = await blob_service.upload_file(
                             file_data=resp.content,
                             file_name=file_name,
-                            content_type="audio/mpeg"
+                            content_type="audio/mpeg",
                         )
                     else:
                         logger.error("recording_download_failed", status=resp.status_code)
             except Exception as e:
-                logger.error("recording_processing_failed", error=str(e))
+                logger.error("recording_processing_failed", error=str(e), call_sid=CallSid)
 
             call.recording_url = azure_url if azure_url else RecordingUrl
-            call.recording_sid = RecordingSid
+            if RecordingSid:
+                call.recording_sid = RecordingSid
             if RecordingDuration:
                 try:
                     call.recording_duration = int(RecordingDuration)
                 except ValueError:
-                    logger.error("recording_duration_parse_failed", raw=RecordingDuration)
+                    logger.error(
+                        "recording_duration_parse_failed",
+                        raw=RecordingDuration,
+                        call_sid=CallSid,
+                    )
             await db.flush()
-        
-        return {"status": "processed"}
+            await db.commit()
+
+        return {"status": "ok"}
     except Exception as e:
         import traceback
         traceback.print_exc()
-        logger.error("recording_webhook_failed", error=str(e), call_sid=CallSid)
+        logger.error("recording_status_failed", error=str(e), call_sid=CallSid)
         return {"status": "error", "message": str(e)}
 
 

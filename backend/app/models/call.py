@@ -74,8 +74,8 @@ class Call(Base):
     recording_sid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     recording_duration: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
-    # Transcript (stored in MongoDB, reference here)
-    transcript_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Transcript
+    transcript_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     transcript_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     # Outcome
@@ -92,6 +92,12 @@ class Call(Base):
     # Quality Metrics
     sentiment_score: Mapped[Optional[float]] = mapped_column(nullable=True)  # -1 to 1
     customer_satisfaction: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1-5
+    
+    # Webhook processing
+    webhook_processed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

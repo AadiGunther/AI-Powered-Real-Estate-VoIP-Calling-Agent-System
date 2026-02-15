@@ -4,7 +4,7 @@ import asyncio
 import json
 from sqlalchemy import select
 
-from app.database import async_session_maker, MongoDB
+from app.database import async_session_maker
 from app.models.property import Property, PropertyType, PropertyStatus
 from app.models.user import User, UserRole
 from app.utils.security import get_password_hash
@@ -176,9 +176,8 @@ async def seed_properties():
 
 async def main():
     """Run the seed script."""
-    await MongoDB.connect()
     await seed_properties()
-    await MongoDB.disconnect()
+    return
 
 
 if __name__ == "__main__":

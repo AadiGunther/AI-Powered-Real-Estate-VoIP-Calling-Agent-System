@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session_maker
-from app.models.call import Call
+from app.models.call import Call, CallStatus
 from app.models.elevenlabs_event_log import ElevenLabsEventLog
 from app.services.blob_service import BlobService
 from app.services.report_service import ReportService
@@ -357,6 +357,10 @@ async def _handle_post_call_transcription(
     if summary:
         call.transcript_summary = summary
     call.webhook_processed_at = datetime.now(timezone.utc)
+    if call.status != CallStatus.COMPLETED.value:
+        call.status = CallStatus.COMPLETED.value
+    if call.ended_at is None:
+        call.ended_at = datetime.fromtimestamp(event_timestamp, tz=timezone.utc)
 
     await db.flush()
     if not await _commit_with_retry(db, "post_call_transcription"):
@@ -563,6 +567,12 @@ async def _handle_post_call_audio(
                 raw=recording_duration,
             )
     call.webhook_processed_at = datetime.now(timezone.utc)
+    if call.status != CallStatus.COMPLETED.value:
+        call.status = CallStatus.COMPLETED.value
+    if call.ended_at is None:
+        call.ended_at = datetime.fromtimestamp(event_timestamp, tz=timezone.utc)
+    if call.duration_seconds is None and call.recording_duration is not None:
+        call.duration_seconds = call.recording_duration
 
     await db.flush()
     if not await _commit_with_retry(db, "post_call_audio"):

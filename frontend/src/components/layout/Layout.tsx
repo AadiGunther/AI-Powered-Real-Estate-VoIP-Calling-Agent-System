@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-    LayoutDashboard, PanelsTopLeft, Users, Phone, BarChart3,
+    LayoutDashboard, PanelsTopLeft, Users, Phone,
     Settings, LogOut, ChevronLeft, ChevronRight, Bell
 } from 'lucide-react';
 import { useAuthStore, useUIStore, useNotificationStore } from '../../store';
@@ -13,7 +13,6 @@ const navItems = [
     { path: '/properties', icon: PanelsTopLeft, label: 'Products' },
     { path: '/leads', icon: Users, label: 'Leads' },
     { path: '/calls', icon: Phone, label: 'Calls' },
-    { path: '/reports', icon: BarChart3, label: 'Reports' },
 ];
 
 const adminItems = [

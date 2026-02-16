@@ -102,10 +102,16 @@ export const LeadList: React.FC = () => {
     };
 
     const toggleSelectAll = () => {
-        if (selectedLeadIds.length === leads.length) {
+        const selectableIds = leads
+            .filter((lead) => !lead.assigned_agent_id)
+            .map((lead) => lead.id);
+        if (
+            selectableIds.length > 0 &&
+            selectableIds.every((id) => selectedLeadIds.includes(id))
+        ) {
             setSelectedLeadIds([]);
         } else {
-            setSelectedLeadIds(leads.map((lead) => lead.id));
+            setSelectedLeadIds(selectableIds);
         }
     };
 
@@ -141,6 +147,24 @@ export const LeadList: React.FC = () => {
     };
 
     const selectedCount = selectedLeadIds.length;
+
+    const selectableLeadIds = leads
+        .filter((lead) => !lead.assigned_agent_id)
+        .map((lead) => lead.id);
+    const allSelectableSelected =
+        selectableLeadIds.length > 0 &&
+        selectableLeadIds.every((id) => selectedLeadIds.includes(id));
+
+    const getAssignedAgentLabel = (assignedAgentId?: number) => {
+        if (!assignedAgentId) {
+            return 'Unassigned';
+        }
+        const agent = agents.find((a) => a.id === assignedAgentId);
+        if (!agent) {
+            return `Agent #${assignedAgentId}`;
+        }
+        return `${agent.full_name} (${agent.email})`;
+    };
 
     return (
         <div className="leads-page">
@@ -215,6 +239,11 @@ export const LeadList: React.FC = () => {
                             <p style={{ fontSize: '0.8rem', color: '#64748b' }}>
                                 Select one or more leads and assign them to an active agent.
                             </p>
+                            {agents.length === 0 && (
+                                <p style={{ fontSize: '0.8rem', color: '#ef4444' }}>
+                                    No active agents found. Create at least one agent user first.
+                                </p>
+                            )}
                         </div>
                         <div
                             style={{
@@ -231,6 +260,7 @@ export const LeadList: React.FC = () => {
                                         e.target.value ? Number(e.target.value) : ''
                                     )
                                 }
+                                disabled={agents.length === 0}
                             >
                                 <option value="">Select agent</option>
                                 {agents.map((agent) => (
@@ -246,7 +276,8 @@ export const LeadList: React.FC = () => {
                                     assigning ||
                                     !selectedAgentId ||
                                     selectedCount === 0 ||
-                                    loading
+                                    loading ||
+                                    agents.length === 0
                                 }
                             >
                                 {assigning ? 'Assigning...' : 'Assign selected'}
@@ -276,10 +307,8 @@ export const LeadList: React.FC = () => {
                                     <th>
                                         <input
                                             type="checkbox"
-                                            checked={
-                                                leads.length > 0 &&
-                                                selectedLeadIds.length === leads.length
-                                            }
+                                            checked={allSelectableSelected}
+                                            disabled={selectableLeadIds.length === 0}
                                             onChange={toggleSelectAll}
                                         />
                                     </th>
@@ -287,6 +316,7 @@ export const LeadList: React.FC = () => {
                                 <th>Contact</th>
                                 <th>Quality</th>
                                 <th>Status</th>
+                                <th>Assigned To</th>
                                 <th>Source</th>
                                 <th>Preferences</th>
                                 <th>Notes</th>
@@ -301,11 +331,13 @@ export const LeadList: React.FC = () => {
                                     <tr key={lead.id}>
                                         {isAdmin && (
                                             <td>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isSelected}
-                                                    onChange={() => toggleLeadSelection(lead.id)}
-                                                />
+                                                {!lead.assigned_agent_id && (
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isSelected}
+                                                        onChange={() => toggleLeadSelection(lead.id)}
+                                                    />
+                                                )}
                                             </td>
                                         )}
                                         <td>
@@ -322,6 +354,9 @@ export const LeadList: React.FC = () => {
                                                     </div>
                                                 </div>
                                             </div>
+                                        </td>
+                                        <td>
+                                            {getAssignedAgentLabel(lead.assigned_agent_id)}
                                         </td>
                                         <td>
                                             <span className={`badge ${getQualityBadge(lead.quality)}`}>

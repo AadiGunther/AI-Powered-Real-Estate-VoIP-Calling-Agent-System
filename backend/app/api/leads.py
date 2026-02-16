@@ -44,17 +44,12 @@ async def list_leads(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> LeadListResponse:
-    """List leads with optional filters. Agents see assigned and unassigned leads."""
+    """List leads with optional filters. Agents see only their assigned leads."""
     query = select(Lead)
     
     # Role-based filtering
     if current_user.role == UserRole.AGENT.value:
-        query = query.where(
-            or_(
-                Lead.assigned_agent_id == current_user.id,
-                Lead.assigned_agent_id == None,
-            )
-        )
+        query = query.where(Lead.assigned_agent_id == current_user.id)
     elif current_user.role == UserRole.MANAGER.value:
         # Managers see leads assigned to their agents (simplified: see unassigned + own assignments)
         pass  # Can see all for now
@@ -451,6 +446,9 @@ async def bulk_assign_leads(
         db.add(audit)
 
     await db.flush()
+
+    for lead in leads:
+        await db.refresh(lead)
 
     return LeadListResponse(
         leads=[LeadResponse.model_validate(lead) for lead in leads],

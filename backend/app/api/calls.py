@@ -667,11 +667,24 @@ async def tool_book_appointment(
                 call_id=payload.call_id,
                 external_call_id=payload.external_call_id,
             )
-            return ToolBookAppointmentResponse(
-                success=False,
-                enquiry_id=None,
-                message="Call not found for appointment booking.",
-            )
+            if payload.external_call_id:
+                call = Call(
+                    call_sid=payload.external_call_id,
+                    direction=CallDirection.OUTBOUND.value,
+                    from_number=settings.twilio_phone_number,
+                    to_number=lead.phone or settings.twilio_phone_number,
+                    status=CallStatus.IN_PROGRESS.value,
+                    started_at=datetime.now(ZoneInfo("Asia/Kolkata")),
+                    handled_by_ai=True,
+                )
+                db.add(call)
+                await db.flush()
+            else:
+                return ToolBookAppointmentResponse(
+                    success=False,
+                    enquiry_id=None,
+                    message="Call not found for appointment booking.",
+                )
         result_appt = await db.execute(
             select(Appointment).where(
                 Appointment.call_id == call.id,
@@ -880,48 +893,48 @@ async def tool_log_call(
         lead = result.scalar_one_or_none()
     
     if payload.lead_id is not None and not lead:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Lead not found for call logging.",
-        )
-    
-    if not lead and not payload.phone:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either lead_id or phone must be provided to log a call.",
-        )
-    customer_number = None
-    if lead and lead.phone:
-        customer_number = lead.phone
-    elif payload.phone:
-        customer_number = payload.phone
-    elif payload.to_number:
-        customer_number = payload.to_number
-    if not customer_number:
-        logger.error(
-            "tool_log_call_missing_customer_number",
+        logger.warning(
+            "tool_log_call_lead_not_found",
             external_call_id=payload.external_call_id,
             lead_id=payload.lead_id,
+            phone=payload.phone,
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Could not determine customer phone number.",
-        )
+        lead = None
     result = await db.execute(select(Call).where(Call.call_sid == payload.external_call_id))
     call = result.scalar_one_or_none()
 
     if call is None:
         logger.warning(
-            "tool_log_call_call_not_found",
+            "tool_log_call_call_not_found_creating_new",
             external_call_id=payload.external_call_id,
             lead_id=payload.lead_id,
             phone=payload.phone,
         )
-        return ToolLogCallResponse(
-            success=False,
-            call_id=None,
-            message="Call not found for call logging. Ensure start_call was called first.",
+        call = Call(
+            call_sid=payload.external_call_id,
+            direction=payload.direction.value,
+            status=payload.status.value,
+            started_at=datetime.now(ZoneInfo("Asia/Kolkata")),
+            duration_seconds=payload.duration_seconds,
+            handled_by_ai=True,
         )
+        if lead:
+            call.lead_id = lead.id
+        if payload.phone:
+            if payload.direction == CallDirection.OUTBOUND:
+                call.from_number = settings.twilio_phone_number
+                call.to_number = payload.phone
+            else:
+                call.from_number = payload.phone
+                call.to_number = settings.twilio_phone_number
+        elif payload.to_number:
+            if payload.direction == CallDirection.OUTBOUND:
+                call.from_number = settings.twilio_phone_number
+                call.to_number = payload.to_number
+            else:
+                call.from_number = payload.to_number
+                call.to_number = settings.twilio_phone_number
+        db.add(call)
 
     logger.info(
         "tool_log_call_update_call",
@@ -1051,7 +1064,26 @@ async def tool_end_call(
     result = await db.execute(select(Call).where(Call.call_sid == payload.external_call_id))
     call = result.scalar_one_or_none()
     if not call:
-        return {"success": False}
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        call = Call(
+            call_sid=payload.external_call_id,
+            direction=CallDirection.OUTBOUND.value,
+            from_number=settings.twilio_phone_number,
+            to_number=settings.twilio_phone_number,
+            status=CallStatus.COMPLETED.value,
+            started_at=now,
+            ended_at=now,
+            handled_by_ai=True,
+        )
+        db.add(call)
+        try:
+            await db.flush()
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger = get_logger("api.calls")
+            logger.error("end_call_db_commit_failed", call_sid=payload.external_call_id, error=str(e))
+        return {"success": True}
 
     if call.status == CallStatus.COMPLETED.value or call.ended_at is not None:
         return {"success": True}

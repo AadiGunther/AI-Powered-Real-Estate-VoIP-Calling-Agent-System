@@ -34,6 +34,9 @@ def setup_logging(debug: bool = False) -> None:
         stream=sys.stdout,
         level=log_level,
     )
+    logging.getLogger("aiosqlite").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
+    logging.getLogger("sqlalchemy.pool").setLevel(logging.INFO)
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

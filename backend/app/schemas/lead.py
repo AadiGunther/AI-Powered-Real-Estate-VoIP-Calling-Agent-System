@@ -64,6 +64,12 @@ class LeadAssign(BaseModel):
     agent_id: int
 
 
+class LeadBulkAssign(BaseModel):
+    """Schema for bulk assigning leads to an agent."""
+    agent_id: int
+    lead_ids: List[int]
+
+
 class LeadResponse(LeadBase):
     """Lead response schema."""
     id: int
@@ -79,6 +85,7 @@ class LeadResponse(LeadBase):
     interested_property_id: Optional[int] = None
     notes: Optional[str] = None
     ai_summary: Optional[str] = None
+    last_call_notes: Optional[str] = None
     
     assigned_agent_id: Optional[int] = None
     assigned_at: Optional[datetime] = None

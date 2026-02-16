@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 import json
-from typing import Optional
+from typing import Optional, Dict
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.lead import Lead, LeadQuality, LeadStatus
+from app.models.call import Call
 from app.models.notification import NotificationType
 from app.models.audit_log import AuditLog, AuditAction
 from app.schemas.lead import (
@@ -22,6 +23,7 @@ from app.schemas.lead import (
     LeadQualityUpdate,
     LeadStatusUpdate,
     LeadAssign,
+    LeadBulkAssign,
 )
 from app.services.notification_service import NotificationService
 from app.utils.security import get_current_user, require_manager
@@ -81,9 +83,28 @@ async def list_leads(
     
     result = await db.execute(query)
     leads = result.scalars().all()
+
+    lead_ids = [lead.id for lead in leads]
+    last_call_notes_map: Dict[int, Optional[str]] = {}
+    if lead_ids:
+        calls_query = (
+            select(Call.lead_id, Call.outcome_notes)
+            .where(Call.lead_id.in_(lead_ids))
+            .order_by(Call.lead_id, Call.created_at.desc())
+        )
+        calls_result = await db.execute(calls_query)
+        for lead_id, outcome_notes in calls_result.all():
+            if lead_id not in last_call_notes_map:
+                last_call_notes_map[lead_id] = outcome_notes
+    
+    lead_responses: list[LeadResponse] = []
+    for lead in leads:
+        response = LeadResponse.model_validate(lead)
+        response.last_call_notes = last_call_notes_map.get(lead.id)
+        lead_responses.append(response)
     
     return LeadListResponse(
-        leads=[LeadResponse.model_validate(lead) for lead in leads],
+        leads=lead_responses,
         total=total,
         page=page,
         page_size=page_size,
@@ -287,7 +308,6 @@ async def assign_lead(
             detail="Lead not found",
         )
     
-    # Verify agent exists
     result = await db.execute(select(User).where(User.id == request.agent_id))
     agent = result.scalar_one_or_none()
     
@@ -295,6 +315,24 @@ async def assign_lead(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent not found",
+        )
+
+    if not agent.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot assign leads to inactive agents",
+        )
+
+    if agent.role != UserRole.AGENT.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Can only assign leads to agents",
+        )
+
+    if lead.assigned_agent_id == request.agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Lead is already assigned to this agent",
         )
 
     previous_agent_id = lead.assigned_agent_id
@@ -328,3 +366,95 @@ async def assign_lead(
     db.add(audit)
 
     return lead
+
+
+@router.put("/assign/bulk", response_model=LeadListResponse)
+async def bulk_assign_leads(
+    request: LeadBulkAssign,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_manager),
+) -> LeadListResponse:
+    result = await db.execute(select(User).where(User.id == request.agent_id))
+    agent = result.scalar_one_or_none()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found",
+        )
+
+    if not agent.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot assign leads to inactive agents",
+        )
+
+    if agent.role != UserRole.AGENT.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Can only assign leads to agents",
+        )
+
+    if not request.lead_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No leads provided for assignment",
+        )
+
+    result = await db.execute(select(Lead).where(Lead.id.in_(request.lead_ids)))
+    leads = result.scalars().all()
+
+    found_ids = {lead.id for lead in leads}
+    requested_ids = set(request.lead_ids)
+    missing_ids = requested_ids - found_ids
+    if missing_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Leads not found: {sorted(missing_ids)}",
+        )
+
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    notification_service = NotificationService(db)
+
+    for lead in leads:
+        if lead.assigned_agent_id == request.agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Lead {lead.id} is already assigned to this agent",
+            )
+
+    for lead in leads:
+        previous_agent_id = lead.assigned_agent_id
+        lead.assigned_agent_id = request.agent_id
+        lead.assigned_at = now
+
+        await notification_service.create_notification(
+            user_id=agent.id,
+            message=f"You have been assigned lead {lead.phone}",
+            notification_type=NotificationType.LEAD_ASSIGNED,
+            related_lead_id=lead.id,
+        )
+
+        audit_payload = json.dumps(
+            {
+                "previous_agent_id": previous_agent_id,
+                "new_agent_id": request.agent_id,
+            }
+        )
+        audit = AuditLog(
+            user_id=current_user.id,
+            action=AuditAction.LEAD_ASSIGNED.value,
+            entity_type="lead",
+            entity_id=lead.id,
+            payload=audit_payload,
+        )
+        db.add(audit)
+
+    await db.flush()
+
+    return LeadListResponse(
+        leads=[LeadResponse.model_validate(lead) for lead in leads],
+        total=len(leads),
+        page=1,
+        page_size=len(leads),
+    )

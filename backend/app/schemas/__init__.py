@@ -83,6 +83,7 @@ __all__ = [
     "LeadQualityUpdate",
     "LeadStatusUpdate",
     "LeadAssign",
+    "LeadBulkAssign",
     # Call
     "CallCreate",
     "CallUpdate",

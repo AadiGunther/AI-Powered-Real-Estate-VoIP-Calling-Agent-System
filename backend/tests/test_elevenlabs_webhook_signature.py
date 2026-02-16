@@ -70,3 +70,39 @@ def test_elevenlabs_webhook_invalid_signature(monkeypatch):
     )
 
     assert response.status_code == 401
+
+
+def test_elevenlabs_webhook_rate_limit(monkeypatch):
+    secret = settings.elevenlabs_webhook_secret or "test-secret"
+    monkeypatch.setattr(settings, "elevenlabs_webhook_secret", secret)
+
+    from app.api import elevenlabs_webhook as webhook_module
+
+    webhook_module._elevenlabs_rate_state.clear()
+    monkeypatch.setattr(webhook_module, "_ELEVENLABS_RATE_LIMIT", 3)
+
+    payload = {
+        "type": "post_call_transcription",
+        "event_timestamp": int(time.time()),
+        "data": {},
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    def make_headers():
+        ts = str(int(time.time()))
+        sig = hmac.new(
+            secret.encode("utf-8"),
+            f"{ts}.{body.decode('utf-8')}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return {
+            "content-type": "application/json",
+            "elevenlabs-signature": f"t={ts},v1={sig}",
+        }
+
+    for _ in range(3):
+        response = client.post("/webhooks/elevenlabs", data=body, headers=make_headers())
+        assert response.status_code == 200
+
+    response = client.post("/webhooks/elevenlabs", data=body, headers=make_headers())
+    assert response.status_code == 429

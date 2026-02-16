@@ -6,7 +6,7 @@ import hashlib
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Dict
 import base64
 
 import asyncio
@@ -27,6 +27,9 @@ from app.utils.logging import get_logger
 
 router = APIRouter()
 logger = get_logger("elevenlabs_webhook")
+_elevenlabs_rate_state: Dict[str, list[float]] = {}
+_ELEVENLABS_RATE_WINDOW_SECONDS = 60.0
+_ELEVENLABS_RATE_LIMIT = 120
 
 
 def _safe_log(level: str, event: str, **kwargs: Any) -> None:
@@ -619,6 +622,21 @@ async def _handle_post_call_audio(
 
 @router.post("/webhooks/elevenlabs")
 async def elevenlabs_webhook(request: Request) -> dict:
+    client_host = request.client.host if request.client and request.client.host else "unknown"
+    now = time.time()
+    bucket = _elevenlabs_rate_state.get(client_host, [])
+    bucket = [ts for ts in bucket if now - ts <= _ELEVENLABS_RATE_WINDOW_SECONDS]
+    if len(bucket) >= _ELEVENLABS_RATE_LIMIT:
+        _safe_log(
+            "warning",
+            "elevenlabs_webhook_rate_limited",
+            client_host=client_host,
+            window_seconds=_ELEVENLABS_RATE_WINDOW_SECONDS,
+            limit=_ELEVENLABS_RATE_LIMIT,
+        )
+        raise HTTPException(status_code=429, detail="Too many ElevenLabs webhook requests")
+    bucket.append(now)
+    _elevenlabs_rate_state[client_host] = bucket
     secret = settings.elevenlabs_webhook_secret
     if not secret:
         raise HTTPException(status_code=500, detail="Webhook secret not configured")

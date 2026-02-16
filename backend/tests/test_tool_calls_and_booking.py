@@ -152,7 +152,7 @@ async def test_tool_book_appointment_creates_records_and_returns_success():
 
 
 @pytest.mark.asyncio
-async def test_tool_book_appointment_requires_existing_call_when_external_id_provided():
+async def test_tool_book_appointment_creates_call_when_external_id_provided():
     async with async_session_maker() as db:  # type: AsyncSession
         lead = Lead(
             name="Test Lead",
@@ -179,5 +179,27 @@ async def test_tool_book_appointment_requires_existing_call_when_external_id_pro
 
         response = await tool_book_appointment(payload=payload, db=db, api_key="test-key")
 
-        assert response.success is False
-        assert response.enquiry_id is None
+        assert response.success is True
+        assert response.enquiry_id is not None
+
+        result_call = await db.execute(select(Call).where(Call.call_sid == external_call_id))
+        created_call = result_call.scalar_one()
+
+        result_appt = await db.execute(
+            select(Appointment).where(
+                Appointment.call_id == created_call.id,
+                Appointment.lead_id == lead.id,
+            )
+        )
+        appointment = result_appt.scalar_one()
+
+        result_enquiry = await db.execute(
+            select(Enquiry).where(
+                Enquiry.call_id == created_call.id,
+                Enquiry.lead_id == lead.id,
+                Enquiry.enquiry_type == EnquiryType.SITE_VISIT.value,
+            )
+        )
+        enquiry = result_enquiry.scalar_one()
+
+        assert enquiry.id == response.enquiry_id

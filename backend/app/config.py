@@ -33,12 +33,6 @@ class Settings(BaseSettings):
     azure_openai_deployment: str = ""
     azure_openai_api_version: str = ""
 
-    # ---------------- AZURE REALTIME (voice agent) ----------------
-    azure_realtime_openai_api_key: str
-    azure_realtime_openai_endpoint: str
-    azure_openai_realtime_deployment: str
-    azure_openai_realtime_api_version: str
-
     # ---------------- AUTH ----------------
     jwt_secret: str
     jwt_algorithm: str
@@ -59,6 +53,9 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
     elevenlabs_base_url: str = "https://api.elevenlabs.io"
+    elevenlabs_realtime_ws_url: str = ""
+    elevenlabs_agent_id: str = ""
+    elevenlabs_agent_phone_number_id: str = ""
     use_elevenlabs_tts: bool = False
     elevenlabs_tools_api_key: str = ""
     elevenlabs_webhook_secret: str = ""

@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-    LayoutDashboard, PanelsTopLeft, Users, Phone,
+    LayoutDashboard, PanelsTopLeft, Users, Phone, CalendarDays,
     Settings, LogOut, ChevronLeft, ChevronRight, Bell
 } from 'lucide-react';
 import { useAuthStore, useUIStore, useNotificationStore } from '../../store';
@@ -12,7 +12,10 @@ const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/properties', icon: PanelsTopLeft, label: 'Products' },
     { path: '/leads', icon: Users, label: 'Leads' },
-    { path: '/calls', icon: Phone, label: 'Calls' },
+    { path: '/appointments', icon: CalendarDays, label: 'Appointments' },
+    { path: '/calls', icon: Phone, label: 'All Calls' },
+    { path: '/calls/received', icon: Phone, label: 'Received Calls' },
+    { path: '/calls/failed', icon: Phone, label: 'Failed Calls' },
 ];
 
 const adminItems = [
@@ -23,12 +26,32 @@ interface LayoutProps {
     children: React.ReactNode;
 }
 
+const formatNotifTime = (iso: string | undefined): string => {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        const now = new Date();
+        const diffMs = now.getTime() - d.getTime();
+        const diffMin = Math.floor(diffMs / 60000);
+        if (diffMin < 1) return 'Just now';
+        if (diffMin < 60) return `${diffMin}m ago`;
+        const diffHr = Math.floor(diffMin / 60);
+        if (diffHr < 24) return `${diffHr}h ago`;
+        const diffDay = Math.floor(diffHr / 24);
+        if (diffDay < 7) return `${diffDay}d ago`;
+        return d.toLocaleDateString();
+    } catch {
+        return '';
+    }
+};
+
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
     const navigate = useNavigate();
     const { user, logout } = useAuthStore();
     const { sidebarOpen, toggleSidebar } = useUIStore();
     const { items, unreadCount } = useNotificationStore();
     const [dropdownOpen, setDropdownOpen] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
 
     const handleLogout = () => {
         disconnectNotificationWebSocket();
@@ -36,12 +59,24 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         navigate('/login');
     };
 
+    // Click-outside handler
+    useEffect(() => {
+        if (!dropdownOpen) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+                setDropdownOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [dropdownOpen]);
+
     useEffect(() => {
         if (!user) {
             return;
         }
-        fetchNotifications().catch(() => {});
-        fetchUnreadCount().catch(() => {});
+        fetchNotifications().catch(() => { });
+        fetchUnreadCount().catch(() => { });
         connectNotificationWebSocket();
         return () => {
             disconnectNotificationWebSocket();
@@ -49,7 +84,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     }, [user]);
 
     const handleNotificationClick = (id: number) => {
-        markNotificationRead(id).catch(() => {});
+        markNotificationRead(id).catch(() => { });
     };
 
     return (
@@ -107,7 +142,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                         <h1 className="page-title">Ujjwal Energies Solar Console</h1>
                     </div>
                     <div className="header-right">
-                        <div className="notification-bell">
+                        <div className="notification-bell" ref={dropdownRef}>
                             <button
                                 className="icon-button"
                                 onClick={() => setDropdownOpen((open) => !open)}
@@ -121,8 +156,12 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                             </button>
                             {dropdownOpen && (
                                 <div className="notification-dropdown">
+                                    <div className="notification-dropdown-header">
+                                        <span>Notifications</span>
+                                        {unreadCount > 0 && <span>{unreadCount} unread</span>}
+                                    </div>
                                     {items.length === 0 && (
-                                        <div className="notification-empty">No notifications</div>
+                                        <div className="notification-empty">No notifications yet</div>
                                     )}
                                     {items.map((notification) => (
                                         <button
@@ -133,6 +172,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                                             <div className="notification-message">{notification.message}</div>
                                             <div className="notification-meta">
                                                 <span className="notification-type">{notification.type.replace(/_/g, ' ')}</span>
+                                                <span className="notification-time">{formatNotifTime(notification.created_at)}</span>
                                             </div>
                                         </button>
                                     ))}

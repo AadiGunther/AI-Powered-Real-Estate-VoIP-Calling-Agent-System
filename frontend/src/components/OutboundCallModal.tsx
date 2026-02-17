@@ -19,8 +19,8 @@ export const OutboundCallModal: React.FC<OutboundCallModalProps> = ({ onClose, o
         setError(null);
 
         try {
-            await api.post('/calls/dial', {
-                to_number: phoneNumber
+            await api.post('/api/call/start', {
+                phone: phoneNumber,
             });
             onCallInitiated();
             onClose();
@@ -49,14 +49,14 @@ export const OutboundCallModal: React.FC<OutboundCallModalProps> = ({ onClose, o
                             <input
                                 id="phone"
                                 type="tel"
-                                placeholder="+1234567890"
+                                placeholder="9876543210"
                                 value={phoneNumber}
                                 onChange={(e) => setPhoneNumber(e.target.value)}
                                 required
-                                pattern="^\+?[1-9]\d{1,14}$"
-                                title="Please enter a valid phone number (E.164 format preferred)"
+                                pattern="^[0-9 +]+$"
+                                title="Enter Indian mobile number, e.g. 9876543210 or +919876543210"
                             />
-                            <small className="help-text">Enter number in E.164 format (e.g., +15551234567)</small>
+                            <small className="help-text">Number will be normalized to +91XXXXXXXXXX</small>
                         </div>
 
                         {error && (

@@ -59,45 +59,12 @@ class RealtimeClient:
         self._last_user_utterance: Optional[str] = None
         self.awaiting_name_answer: bool = False
         self.customer_name: Optional[str] = None
-        self.tts_provider: str = (
-            "elevenlabs"
-            if settings.use_elevenlabs_tts and settings.elevenlabs_api_key and settings.elevenlabs_voice_id
-            else "azure"
-        )
-        self.eleven_tts: Optional[ElevenLabsTTS] = (
-            ElevenLabsTTS() if self.tts_provider == "elevenlabs" else None
-        )
+        self.tts_provider: str = "elevenlabs"
+        self.eleven_tts: Optional[ElevenLabsTTS] = ElevenLabsTTS()
 
     # -------------------------
     async def connect(self):
-        # Handle both full URL from .env or base endpoint
-        endpoint = settings.azure_realtime_openai_endpoint
-        
-        if "openai/realtime" in endpoint:
-            # Full URL provided
-            url = endpoint.replace("https://", "wss://")
-        else:
-            # Base endpoint provided
-            base_url = endpoint.rstrip("/").replace("https://", "wss://")
-            url = (
-                f"{base_url}/openai/realtime"
-                f"?api-version={settings.azure_openai_realtime_api_version}"
-                f"&deployment={settings.azure_openai_realtime_deployment}"
-            )
-
-        self.socket = await websockets.connect(
-            url,
-            additional_headers={"api-key": settings.azure_realtime_openai_api_key},
-            subprotocols=["realtime"],
-            ping_interval=PING_INTERVAL,
-            ping_timeout=PING_TIMEOUT,
-            max_size=None,
-        )
-
-        self.is_connected = True
-        asyncio.create_task(self._receive_loop())
-
-        logger.info("realtime_connected", call_sid=self.call_sid)
+        raise RuntimeError("Azure Realtime client is no longer used in this deployment.")
 
     # -------------------------
     async def update_session(self, instructions: str):

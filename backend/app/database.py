@@ -37,8 +37,9 @@ def _migrate_calls_table(connection) -> None:
     except Exception:
         return
 
+    dialect = connection.dialect.name
+
     if "webhook_processed_at" not in columns:
-        dialect = connection.dialect.name
         try:
             if dialect == "sqlite":
                 connection.execute(
@@ -53,6 +54,63 @@ def _migrate_calls_table(connection) -> None:
             else:
                 connection.execute(
                     text("ALTER TABLE calls ADD COLUMN webhook_processed_at TIMESTAMP")
+                )
+        except Exception:
+            return
+
+    if "reception_status" not in columns:
+        try:
+            if dialect == "sqlite":
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN reception_status VARCHAR(20)")
+                )
+            elif dialect == "postgresql":
+                connection.execute(
+                    text(
+                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS reception_status VARCHAR(20)"
+                    )
+                )
+            else:
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN reception_status VARCHAR(20)")
+                )
+        except Exception:
+            return
+
+    if "reception_timestamp" not in columns:
+        try:
+            if dialect == "sqlite":
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN reception_timestamp DATETIME")
+                )
+            elif dialect == "postgresql":
+                connection.execute(
+                    text(
+                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS reception_timestamp TIMESTAMPTZ"
+                    )
+                )
+            else:
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN reception_timestamp TIMESTAMP")
+                )
+        except Exception:
+            return
+
+    if "caller_username" not in columns:
+        try:
+            if dialect == "sqlite":
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN caller_username VARCHAR(255)")
+                )
+            elif dialect == "postgresql":
+                connection.execute(
+                    text(
+                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_username VARCHAR(255)"
+                    )
+                )
+            else:
+                connection.execute(
+                    text("ALTER TABLE calls ADD COLUMN caller_username VARCHAR(255)")
                 )
         except Exception:
             return

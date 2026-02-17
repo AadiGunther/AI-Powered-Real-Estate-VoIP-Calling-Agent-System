@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session_maker
@@ -67,7 +67,9 @@ async def list_notifications(
         query = query.where(Notification.created_at >= date_from)
     if date_to is not None:
         query = query.where(Notification.created_at <= date_to)
-    count_query = select(Notification).where(Notification.user_id == current_user.id)
+    count_query = select(func.count()).select_from(Notification).where(
+        Notification.user_id == current_user.id
+    )
     if is_read is not None:
         count_query = count_query.where(Notification.is_read == is_read)
     if type is not None:
@@ -252,4 +254,3 @@ async def notifications_ws(websocket: WebSocket) -> None:
     except Exception:
         await unregister_connection(user.id, websocket)
         await websocket.close()
-

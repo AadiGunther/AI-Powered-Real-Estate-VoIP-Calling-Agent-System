@@ -18,6 +18,7 @@ from app.models.call import Call, CallStatus, CallOutcome, CallDirection
 from app.models.lead import Lead, LeadQuality, LeadStatus, LeadSource
 from app.models.enquiry import Enquiry, EnquiryType
 from app.models.appointment import Appointment, AppointmentStatus
+from app.models.notification import NotificationType
 from app.schemas.call import (
     CallResponse,
     CallListResponse,
@@ -28,8 +29,10 @@ from app.schemas.call import (
     DialRequest,
 )
 from app.services.blob_service import BlobService
+from app.services.notification_service import NotificationService
 from app.utils.security import get_current_user
 from app.utils.logging import get_logger
+from app.utils.utils import clean_indian_number
 from pydantic import BaseModel, EmailStr
 from twilio.rest import Client as TwilioClient
 from twilio.base.exceptions import TwilioRestException
@@ -64,6 +67,12 @@ async def verify_elevenlabs_api_key(x_api_key: str = Header(..., alias="x-api-ke
     timestamps.append(now)
     _elevenlabs_rate_state[x_api_key] = timestamps
     return x_api_key
+
+
+class ElevenLabsDialRequest(BaseModel):
+    caller_id: str
+    recipient_number: str
+    voice_id: str
 
 
 @router.post("/dial", response_model=CallResponse)
@@ -234,6 +243,47 @@ async def list_calls(
     )
 
 
+@router.get("/recordings", response_model=CallListResponse)
+async def list_recordings(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CallListResponse:
+    """List calls that have stored recordings (admin only)."""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can access call recordings",
+        )
+
+    base_query = select(Call).where(Call.recording_url.is_not(None))
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await db.execute(count_query)).scalar() or 0
+
+    query = (
+        base_query.order_by(Call.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await db.execute(query)
+    calls = result.scalars().all()
+
+    logger = get_logger("api.calls")
+    logger.info(
+        "list_recordings_result",
+        total=total,
+        returned=len(calls),
+    )
+
+    return CallListResponse(
+        calls=[CallResponse.model_validate(call) for call in calls],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
 @router.get("/{call_id}", response_model=CallResponse)
 async def get_call(
     call_id: int,
@@ -259,7 +309,7 @@ async def get_call_recording(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Get call recording URL (admin only)."""
+    """Get short-lived SAS recording URL (admin only)."""
     if not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -279,11 +329,20 @@ async def get_call_recording(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Recording not available for this call",
         )
-    
+
+    blob_service = BlobService()
+    sas_url = blob_service.generate_sas_from_blob_url(call.recording_url, expiry_minutes=15)
+    if not sas_url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate recording URL",
+        )
+    sas_url = sas_url.strip().strip("`").strip()
+
     return {
         "call_id": call.id,
         "call_sid": call.call_sid,
-        "recording_url": call.recording_url,
+        "recording_url": sas_url,
         "duration": call.recording_duration,
     }
 
@@ -418,27 +477,6 @@ class ToolBookAppointmentRequest(BaseModel):
 class ToolBookAppointmentResponse(BaseModel):
     success: bool
     enquiry_id: Optional[int] = None
-    message: str
-
-
-class ToolLogCallRequest(BaseModel):
-    external_call_id: str
-    lead_id: Optional[int] = None
-    phone: Optional[str] = None
-    to_number: Optional[str] = None
-    direction: CallDirection = CallDirection.OUTBOUND
-    status: CallStatus = CallStatus.COMPLETED
-    outcome: Optional[CallOutcome] = None
-    summary: Optional[str] = None
-    recording_url: Optional[str] = None
-    duration_seconds: Optional[int] = None
-    lead_status: Optional[LeadStatus] = None
-    lead_quality: Optional[LeadQuality] = None
-
-
-class ToolLogCallResponse(BaseModel):
-    success: bool
-    call_id: Optional[int] = None
     message: str
 
 
@@ -737,6 +775,24 @@ async def tool_book_appointment(
             appointment_id=appointment.id,
             enquiry_id=enquiry.id,
         )
+
+        notification_service = NotificationService(db)
+        result_users = await db.execute(
+            select(User).where(
+                User.role.in_([UserRole.ADMIN.value, UserRole.MANAGER.value])
+            )
+        )
+        admins = result_users.scalars().all()
+        for admin in admins:
+            await notification_service.create_notification(
+                user_id=admin.id,
+                message=(
+                    f"Appointment booked for lead {lead.phone} on "
+                    f"{appointment.scheduled_for.astimezone(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M')}"
+                ),
+                notification_type=NotificationType.APPOINTMENT_BOOKED,
+                related_lead_id=lead.id,
+            )
         return ToolBookAppointmentResponse(
             success=True,
             enquiry_id=enquiry.id,
@@ -867,118 +923,106 @@ async def tool_save_summary(
         )
 
 
-@router.post("/tools/log_call", response_model=ToolLogCallResponse)
-async def tool_log_call(
-    payload: ToolLogCallRequest,
-    db: AsyncSession = Depends(get_db),
-    api_key: str = Depends(verify_elevenlabs_api_key),
-) -> ToolLogCallResponse:
-    logger = get_logger("api.calls")
-    logger.info(
-        "tool_log_call_request",
-        external_call_id=payload.external_call_id,
-        lead_id=payload.lead_id,
-        phone=payload.phone,
-        to_number=payload.to_number,
-        direction=payload.direction.value,
-        status=payload.status.value,
-        duration_seconds=payload.duration_seconds,
-    )
-    lead = None
-    if payload.lead_id is not None:
-        result = await db.execute(select(Lead).where(Lead.id == payload.lead_id))
-        lead = result.scalar_one_or_none()
-    elif payload.phone:
-        result = await db.execute(select(Lead).where(Lead.phone == payload.phone))
-        lead = result.scalar_one_or_none()
-    
-    if payload.lead_id is not None and not lead:
-        logger.warning(
-            "tool_log_call_lead_not_found",
-            external_call_id=payload.external_call_id,
-            lead_id=payload.lead_id,
-            phone=payload.phone,
-        )
-        lead = None
-    result = await db.execute(select(Call).where(Call.call_sid == payload.external_call_id))
-    call = result.scalar_one_or_none()
-
-    if call is None:
-        logger.warning(
-            "tool_log_call_call_not_found_creating_new",
-            external_call_id=payload.external_call_id,
-            lead_id=payload.lead_id,
-            phone=payload.phone,
-        )
-        call = Call(
-            call_sid=payload.external_call_id,
-            direction=payload.direction.value,
-            status=payload.status.value,
-            started_at=datetime.now(ZoneInfo("Asia/Kolkata")),
-            duration_seconds=payload.duration_seconds,
-            handled_by_ai=True,
-        )
-        if lead:
-            call.lead_id = lead.id
-        if payload.phone:
-            if payload.direction == CallDirection.OUTBOUND:
-                call.from_number = settings.twilio_phone_number
-                call.to_number = payload.phone
-            else:
-                call.from_number = payload.phone
-                call.to_number = settings.twilio_phone_number
-        elif payload.to_number:
-            if payload.direction == CallDirection.OUTBOUND:
-                call.from_number = settings.twilio_phone_number
-                call.to_number = payload.to_number
-            else:
-                call.from_number = payload.to_number
-                call.to_number = settings.twilio_phone_number
-        db.add(call)
-
-    logger.info(
-        "tool_log_call_update_call",
-        external_call_id=payload.external_call_id,
-        previous_status=call.status,
-        new_status=payload.status.value,
-        previous_duration=call.duration_seconds,
-        new_duration=payload.duration_seconds,
-    )
-    call.status = payload.status.value
-    call.duration_seconds = payload.duration_seconds
-    call.outcome = payload.outcome.value if payload.outcome else call.outcome
-    if payload.summary:
-        if call.outcome_notes:
-            call.outcome_notes = f"{call.outcome_notes}\n\n{payload.summary}"
-        else:
-            call.outcome_notes = payload.summary
-    if lead:
-        call.lead_id = lead.id
-    
-    if payload.recording_url:
-        call.recording_url = payload.recording_url
-    
-    if lead:
-        if payload.lead_status:
-            lead.status = payload.lead_status.value
-        if payload.lead_quality:
-            lead.quality = payload.lead_quality.value
-        lead.last_contacted_at = datetime.now(ZoneInfo("Asia/Kolkata"))
-    
-    await db.flush()
-    await db.refresh(call)
-    await db.commit()
-    
-    return ToolLogCallResponse(
-        success=True,
-        call_id=call.id,
-        message="Call logged successfully.",
-    )
-
-
 class HumanDialRequest(BaseModel):
     to_number: str
     lead_id: Optional[int] = None
+
+
+class ElevenLabsUserDialRequest(BaseModel):
+    to_number: str
+    voice_id: Optional[str] = None
+
+
+@router.post("/dial/elevenlabs", response_model=CallResponse)
+async def dial_elevenlabs_number(
+    request: ElevenLabsUserDialRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Call:
+    if not current_user.is_agent_role and not current_user.is_manager and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only agents and managers can initiate ElevenLabs outbound calls.",
+        )
+
+    try:
+        formatted_number = clean_indian_number(request.to_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    voice_id = request.voice_id or settings.elevenlabs_voice_id
+    if not voice_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ElevenLabs voice ID is not configured.",
+        )
+    if not settings.elevenlabs_realtime_ws_url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ElevenLabs realtime WebSocket URL is not configured.",
+        )
+
+    logger = get_logger("api.calls")
+    try:
+        client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
+
+        twiml_url = f"{settings.base_url}/twilio/elevenlabs-outbound?voice_id={voice_id}"
+
+        call_kwargs = {
+            "to": formatted_number,
+            "from_": settings.twilio_phone_number,
+            "url": twiml_url,
+            "method": "POST",
+            "status_callback": f"{settings.base_url}/twilio/call-status",
+            "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+            "status_callback_method": "POST",
+            "record": True,
+            "recording_status_callback": f"{settings.base_url}/twilio/recording-status",
+            "recording_status_callback_method": "POST",
+        }
+
+        call = client.calls.create(**call_kwargs)
+
+        db_call = Call(
+            call_sid=call.sid,
+            from_number=settings.twilio_phone_number,
+            to_number=formatted_number,
+            direction=CallDirection.OUTBOUND.value,
+            status=CallStatus.INITIATED.value,
+            started_at=datetime.now(ZoneInfo("Asia/Kolkata")),
+            handled_by_ai=True,
+        )
+
+        db.add(db_call)
+        await db.commit()
+        await db.refresh(db_call)
+
+        logger.info(
+            "elevenlabs_outbound_call_initiated_ui",
+            call_id=db_call.id,
+            call_sid=db_call.call_sid,
+            from_number=db_call.from_number,
+            to_number=db_call.to_number,
+            voice_id=voice_id,
+        )
+
+        return db_call
+    except TwilioRestException as e:
+        logger.error("elevenlabs_twilio_error_ui", code=e.code, msg=e.msg, status=e.status)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Twilio Error ({e.code}): {e.msg}",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.error("elevenlabs_outbound_call_failed_ui", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initiate ElevenLabs call: {str(e)}",
+        )
 
 
 @router.post("/dial/human", response_model=CallResponse)
@@ -1051,55 +1095,81 @@ async def human_dial_number(
         )
 
 
-class ToolEndCallRequest(BaseModel):
-    external_call_id: str
-
-
-@router.post("/tools/end_call")
-async def tool_end_call(
-    payload: ToolEndCallRequest,
+@router.post("/tools/elevenlabs_dial", response_model=CallResponse)
+async def elevenlabs_dial_number(
+    request: ElevenLabsDialRequest,
     db: AsyncSession = Depends(get_db),
     api_key: str = Depends(verify_elevenlabs_api_key),
-) -> dict:
-    result = await db.execute(select(Call).where(Call.call_sid == payload.external_call_id))
-    call = result.scalar_one_or_none()
-    if not call:
-        now = datetime.now(ZoneInfo("Asia/Kolkata"))
-        call = Call(
-            call_sid=payload.external_call_id,
+) -> Call:
+    logger = get_logger("api.calls")
+    try:
+        client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
+
+        if not settings.elevenlabs_realtime_ws_url:
+            logger.error("elevenlabs_realtime_ws_url_not_configured")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="ElevenLabs realtime WebSocket URL is not configured.",
+            )
+
+        twiml_url = (
+            f"{settings.base_url}/twilio/elevenlabs-outbound"
+            f"?voice_id={request.voice_id}"
+        )
+
+        call_kwargs = {
+            "to": request.recipient_number,
+            "from_": request.caller_id,
+            "url": twiml_url,
+            "method": "POST",
+            "status_callback": f"{settings.base_url}/twilio/call-status",
+            "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+            "status_callback_method": "POST",
+            "record": True,
+            "recording_status_callback": f"{settings.base_url}/twilio/recording-status",
+            "recording_status_callback_method": "POST",
+        }
+
+        call = client.calls.create(**call_kwargs)
+
+        db_call = Call(
+            call_sid=call.sid,
+            from_number=request.caller_id,
+            to_number=request.recipient_number,
             direction=CallDirection.OUTBOUND.value,
-            from_number=settings.twilio_phone_number,
-            to_number=settings.twilio_phone_number,
-            status=CallStatus.COMPLETED.value,
-            started_at=now,
-            ended_at=now,
+            status=CallStatus.INITIATED.value,
+            started_at=datetime.now(ZoneInfo("Asia/Kolkata")),
             handled_by_ai=True,
         )
-        db.add(call)
-        try:
-            await db.flush()
-            await db.commit()
-        except Exception as e:
-            await db.rollback()
-            logger = get_logger("api.calls")
-            logger.error("end_call_db_commit_failed", call_sid=payload.external_call_id, error=str(e))
-        return {"success": True}
 
-    if call.status == CallStatus.COMPLETED.value or call.ended_at is not None:
-        return {"success": True}
-
-    print("Marking call as completed for CallSid:", call.call_sid)
-
-    call.status = CallStatus.COMPLETED.value
-    call.ended_at = datetime.now(ZoneInfo("Asia/Kolkata"))
-
-    try:
-        await db.flush()
+        db.add(db_call)
         await db.commit()
-    except Exception as e:
-        await db.rollback()
-        logger = get_logger("api.calls")
-        logger.error("end_call_db_commit_failed", call_sid=call.call_sid, error=str(e))
-        return {"success": True}
+        await db.refresh(db_call)
 
-    return {"success": True}
+        logger.info(
+            "elevenlabs_outbound_call_initiated",
+            call_id=db_call.id,
+            call_sid=db_call.call_sid,
+            from_number=db_call.from_number,
+            to_number=db_call.to_number,
+            voice_id=request.voice_id,
+        )
+
+        return db_call
+
+    except TwilioRestException as e:
+        logger.error("elevenlabs_twilio_error", code=e.code, msg=e.msg, status=e.status)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Twilio Error ({e.code}): {e.msg}",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.error("elevenlabs_outbound_call_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initiate ElevenLabs call: {str(e)}",
+        )

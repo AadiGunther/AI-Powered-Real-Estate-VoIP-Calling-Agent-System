@@ -187,8 +187,14 @@ export const Dashboard: React.FC = () => {
                             <XAxis dataKey="name" stroke="#64748b" />
                             <YAxis stroke="#64748b" />
                             <Tooltip
-                                contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                                labelStyle={{ color: '#f8fafc' }}
+                                contentStyle={{
+                                    background: '#ffffff',
+                                    border: '1px solid rgba(15, 23, 42, 0.12)',
+                                    borderRadius: '8px',
+                                    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.12)',
+                                }}
+                                labelStyle={{ color: '#0f172a' }}
+                                itemStyle={{ color: '#0f172a' }}
                             />
                             <Area type="monotone" dataKey="calls" stroke="#6366f1" fill="url(#callGradient)" />
                         </AreaChart>
@@ -208,8 +214,14 @@ export const Dashboard: React.FC = () => {
                             <XAxis dataKey="name" stroke="#64748b" />
                             <YAxis stroke="#64748b" />
                             <Tooltip
-                                contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                                labelStyle={{ color: '#f8fafc' }}
+                                contentStyle={{
+                                    background: '#ffffff',
+                                    border: '1px solid rgba(15, 23, 42, 0.12)',
+                                    borderRadius: '8px',
+                                    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.12)',
+                                }}
+                                labelStyle={{ color: '#0f172a' }}
+                                itemStyle={{ color: '#0f172a' }}
                             />
                             <Area type="monotone" dataKey="leads" stroke="#10b981" fill="url(#leadGradient)" />
                         </AreaChart>

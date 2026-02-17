@@ -78,6 +78,14 @@ class Call(Base):
     transcript_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     transcript_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
+    # Reception status and caller info
+    reception_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    reception_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    caller_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    
+    # Structured Report (Section 7)
+    structured_report: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
     # Outcome
     outcome: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     outcome_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

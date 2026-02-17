@@ -1,13 +1,19 @@
 
-import React, { useState, useEffect } from 'react';
-import { Phone, Calendar, ArrowUpRight, ArrowDownLeft, Filter } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Phone, Calendar, ArrowUpRight, ArrowDownLeft, Filter, PlayCircle, Download } from 'lucide-react';
 import api from '../../services/api';
-import type { Call, CallListResponse } from '../../types/call';
+import type { Call, CallListResponse, CallTranscript } from '../../types/call';
 import { OutboundCallModal } from '../../components/OutboundCallModal';
+import { useAuthStore } from '../../store';
 import './CallHistory.css';
 
-export const CallHistory: React.FC = () => {
+interface CallHistoryProps {
+    receptionFilter?: 'received' | 'not_received';
+}
+
+export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => {
     const [calls, setCalls] = useState<Call[]>([]);
+    const [recordings, setRecordings] = useState<Call[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [total, setTotal] = useState(0);
@@ -15,13 +21,41 @@ export const CallHistory: React.FC = () => {
     const [isCallModalOpen, setIsCallModalOpen] = useState(false);
     const [selectedCall, setSelectedCall] = useState<Call | null>(null);
 
-    // Filters
     const [statusFilter, setStatusFilter] = useState('');
     const [directionFilter, setDirectionFilter] = useState('');
+
+    const [transcript, setTranscript] = useState<CallTranscript | null>(null);
+    const [transcriptLoading, setTranscriptLoading] = useState(false);
+    const [transcriptError, setTranscriptError] = useState<string | null>(null);
+
+    const [recordingsLoading, setRecordingsLoading] = useState(false);
+    const [recordingsError, setRecordingsError] = useState<string | null>(null);
+
+    const { user } = useAuthStore();
+    const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+    const [recordingError, setRecordingError] = useState<string | null>(null);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    const normalizeExternalUrl = (raw: string) => {
+        const trimmed = raw.trim();
+        const strippedBackticks = trimmed.replace(/^`+/, '').replace(/`+$/, '');
+        const strippedQuotes = strippedBackticks.replace(/^"+/, '').replace(/"+$/, '');
+        return strippedQuotes.trim();
+    };
 
     useEffect(() => {
         fetchCalls();
     }, [page, statusFilter, directionFilter]);
+
+    useEffect(() => {
+        if (user?.role === 'admin') {
+            fetchRecordings();
+        } else {
+            setRecordings([]);
+            setRecordingsError(null);
+            setRecordingsLoading(false);
+        }
+    }, [user]);
 
     const fetchCalls = async () => {
         setLoading(true);
@@ -52,6 +86,110 @@ export const CallHistory: React.FC = () => {
         }
     };
 
+    const handleSelectCall = async (call: Call, opts?: { autoplay?: boolean }) => {
+        setSelectedCall(call);
+        setTranscript(null);
+        setTranscriptError(null);
+        setRecordingUrl(null);
+        setRecordingError(null);
+
+        if (call.recording_url) {
+            if (user?.role === 'admin') {
+                const maxAttempts = 3;
+                for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                    try {
+                        const response = await api.get<{ playback_url: string }>(
+                            `/calls/${call.id}/recording/playback-url`
+                        );
+                        const url = normalizeExternalUrl(response.data.playback_url);
+                        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                            setRecordingError('Recording URL is not playable in the browser.');
+                            return;
+                        }
+                        setRecordingUrl(url);
+                        if (opts?.autoplay) {
+                            setTimeout(() => {
+                                audioRef.current?.play().catch(() => {
+                                    setRecordingError('Press play in the audio player to start playback.');
+                                });
+                            }, 0);
+                        }
+                        return;
+                    } catch (err: any) {
+                        console.debug('Failed to fetch playback URL', {
+                            callId: call.id,
+                            attempt,
+                            status: err?.response?.status,
+                            detail: err?.response?.data?.detail,
+                        });
+                        if (attempt === maxAttempts) {
+                            setRecordingError(
+                                err?.response?.data?.detail ||
+                                    'Recording exists but could not be accessed.'
+                            );
+                            return;
+                        }
+                        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+                    }
+                }
+            }
+
+            const url = call.recording_url;
+            const normalized = normalizeExternalUrl(url);
+            if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+                setRecordingUrl(normalized);
+                if (opts?.autoplay) {
+                    setTimeout(() => {
+                        audioRef.current?.play().catch(() => {
+                            setRecordingError('Press play in the audio player to start playback.');
+                        });
+                    }, 0);
+                }
+                return;
+            }
+
+            setRecordingError('Recording URL is not playable in the browser.');
+        }
+    };
+
+    const fetchTranscript = async (callId: number) => {
+        setTranscriptLoading(true);
+        setTranscriptError(null);
+        try {
+            const response = await api.get<CallTranscript>(`/calls/${callId}/transcript`);
+            setTranscript(response.data);
+        } catch (err: any) {
+            const message =
+                err?.response?.data?.detail ||
+                'Transcript not available for this call.';
+            setTranscriptError(message);
+            setTranscript(null);
+        } finally {
+            setTranscriptLoading(false);
+        }
+    };
+
+    const fetchRecordings = async () => {
+        setRecordingsLoading(true);
+        setRecordingsError(null);
+        try {
+            const params = new URLSearchParams({
+                page: '1',
+                page_size: '50',
+            });
+            const response = await api.get<CallListResponse>(`/calls/recordings?${params.toString()}`);
+            setRecordings(response.data.calls);
+        } catch (err: any) {
+            const message =
+                err?.response?.data?.detail ||
+                'Failed to load recordings. Please try again.';
+            setRecordingsError(message);
+            setRecordings([]);
+        } finally {
+            setRecordingsLoading(false);
+        }
+    };
+
     const formatDate = (dateString: string) => {
         return new Date(dateString).toLocaleString();
     };
@@ -75,46 +213,101 @@ export const CallHistory: React.FC = () => {
         return badges[status] || 'badge-default';
     };
 
+    const normalizeReceptionStatus = (call: Call): 'received' | 'not_received' => {
+        if (call.reception_status === 'received' || call.reception_status === 'not_received') {
+            return call.reception_status;
+        }
+        if (call.status === 'completed' || call.answered_at || call.duration_seconds) {
+            return 'received';
+        }
+        return 'not_received';
+    };
+
+    const filteredCalls = calls.filter((call) => {
+        if (!receptionFilter) return true;
+        const receptionStatus = normalizeReceptionStatus(call);
+        return receptionFilter === receptionStatus;
+    });
+
+    const effectiveRecordingUrl = selectedCall ? recordingUrl || null : null;
+
     return (
-        <div className="call-history-page">
-            <div className="page-header">
-                <div>
-                    <h1>Call History</h1>
-                    <p>{total} total calls</p>
+        <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
+            <div className="call-history-page">
+                <div className="page-header">
+                    <div>
+                        <h1 className="text-2xl font-semibold text-slate-900">Call History</h1>
+                        <p className="mt-1 text-sm text-slate-500">{total} total calls</p>
+                    </div>
+                    <div className="header-actions">
+                        <button className="btn btn-primary" onClick={() => setIsCallModalOpen(true)}>
+                            <Phone size={18} /> Place Call
+                        </button>
+                    </div>
                 </div>
-                <div className="header-actions">
-                    <button className="btn btn-primary" onClick={() => setIsCallModalOpen(true)}>
-                        <Phone size={18} /> Place Call
-                    </button>
-                </div>
-            </div>
 
-            <div className="filters-bar">
-                <div className="filter-group">
-                    <Filter size={18} />
-                    <select
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        className="filter-select"
-                    >
-                        <option value="">All Statuses</option>
-                        <option value="completed">Completed</option>
-                        <option value="failed">Failed</option>
-                        <option value="no_answer">No Answer</option>
-                        <option value="busy">Busy</option>
-                    </select>
+                <div className="filters-bar">
+                    <div className="filter-group">
+                        <Filter size={18} />
+                        <select
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            className="filter-select"
+                        >
+                            <option value="">All Statuses</option>
+                            <option value="completed">Completed</option>
+                            <option value="failed">Failed</option>
+                            <option value="no_answer">No Answer</option>
+                            <option value="busy">Busy</option>
+                        </select>
 
-                    <select
-                        value={directionFilter}
-                        onChange={(e) => setDirectionFilter(e.target.value)}
-                        className="filter-select"
-                    >
-                        <option value="">All Directions</option>
-                        <option value="inbound">Inbound</option>
-                        <option value="outbound">Outbound</option>
-                    </select>
+                        <select
+                            value={directionFilter}
+                            onChange={(e) => setDirectionFilter(e.target.value)}
+                            className="filter-select"
+                        >
+                            <option value="">All Directions</option>
+                            <option value="inbound">Inbound</option>
+                            <option value="outbound">Outbound</option>
+                        </select>
+                    </div>
                 </div>
-            </div>
+
+                {selectedCall && recordingError && (
+                    <div className="error-message">
+                        {recordingError}
+                    </div>
+                )}
+
+                {selectedCall && effectiveRecordingUrl && (
+                    <div className="recording-player">
+                        <div className="recording-player-header">
+                            <span className="recording-player-title">
+                                Call Recording –{' '}
+                                {selectedCall.caller_username ||
+                                    (selectedCall.direction === 'inbound'
+                                        ? selectedCall.from_number
+                                        : selectedCall.to_number)}
+                            </span>
+                            <a
+                                href={effectiveRecordingUrl}
+                                download
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="recording-download-link"
+                            >
+                                <Download size={16} />
+                                <span>Download</span>
+                            </a>
+                        </div>
+                        <audio
+                            ref={audioRef}
+                            controls
+                            src={effectiveRecordingUrl}
+                            className="recording-audio"
+                        />
+                    </div>
+                )}
 
             {loading && (
                 <div className="loading">Loading call history...</div>
@@ -126,7 +319,7 @@ export const CallHistory: React.FC = () => {
                 </div>
             )}
 
-            {!loading && !error && calls.length === 0 && (
+            {!loading && !error && filteredCalls.length === 0 && (
                 <div className="empty-state">
                     No calls found for the selected filters.
                 </div>
@@ -134,161 +327,274 @@ export const CallHistory: React.FC = () => {
 
             {!loading && !error && calls.length > 0 && (
                 <>
-                    <div className="table-container">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Direction</th>
-                                    <th>From / To</th>
-                                    <th>Status</th>
-                                    <th>Duration</th>
-                                    <th>Date & Time</th>
-                                    <th>AI Handled</th>
-                                    <th>Outcome</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {calls.map((call) => (
-                                    <tr
-                                        key={call.id}
-                                        onClick={() => setSelectedCall(call)}
-                                        className={selectedCall?.id === call.id ? 'row-selected' : ''}
-                                    >
-                                        <td>
-                                            <div className="direction-cell">
-                                                {call.direction === 'inbound' ? (
-                                                    <ArrowDownLeft size={16} className="text-success" />
-                                                ) : (
-                                                    <ArrowUpRight size={16} className="text-primary" />
-                                                )}
-                                                <span className="capitalize">{call.direction}</span>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <div className="phone-cell">
-                                                <span className="phone-label">From:</span> {call.from_number}<br />
-                                                <span className="phone-label">To:</span> {call.to_number}
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <span className={`badge ${getStatusBadge(call.status)}`}>
-                                                {call.status.replace('_', ' ')}
-                                            </span>
-                                        </td>
-                                        <td>{formatDuration(call.duration_seconds)}</td>
-                                        <td>
-                                            <div className="date-cell">
-                                                <Calendar size={14} />
-                                                <span>{formatDate(call.created_at)}</span>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            {call.handled_by_ai ? (
-                                                <span className="badge badge-ai">AI Agent</span>
-                                            ) : (
-                                                <span className="badge badge-human">Human</span>
-                                            )}
-                                        </td>
-                                        <td>
-                                            {call.outcome ? (
-                                                <span className="outcome-text">{call.outcome.replace('_', ' ')}</span>
-                                            ) : '-'}
-                                        </td>
+                    <div className="table-and-sidebar">
+                        <div className="table-container">
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Direction</th>
+                                        <th>From / To</th>
+                                        <th>Status</th>
+                                        <th>Duration</th>
+                                        <th>Date & Time</th>
+                                        <th>AI Handled</th>
+                                        <th>Recording</th>
+                                        <th>Outcome</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    {filteredCalls.map((call) => (
+                                        <tr
+                                            key={call.id}
+                                            onClick={() => handleSelectCall(call)}
+                                            className={selectedCall?.id === call.id ? 'row-selected' : ''}
+                                        >
+                                            <td>
+                                                <div className="direction-cell">
+                                                    {call.direction === 'inbound' ? (
+                                                        <ArrowDownLeft size={16} className="text-success" />
+                                                    ) : (
+                                                        <ArrowUpRight size={16} className="text-primary" />
+                                                    )}
+                                                    <span className="capitalize">{call.direction}</span>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <div className="phone-cell">
+                                                    <span className="phone-label">From:</span> {call.from_number}
+                                                    <br />
+                                                    <span className="phone-label">To:</span> {call.to_number}
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span className={`badge ${getStatusBadge(call.status)}`}>
+                                                    {call.status.replace('_', ' ')}
+                                                </span>
+                                            </td>
+                                            <td>{formatDuration(call.duration_seconds)}</td>
+                                            <td>
+                                                <div className="date-cell">
+                                                    <Calendar size={14} />
+                                                    <span>{formatDate(call.created_at)}</span>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                {call.handled_by_ai ? (
+                                                    <span className="badge badge-ai">AI Agent</span>
+                                                ) : (
+                                                    <span className="badge badge-human">Human</span>
+                                                )}
+                                            </td>
+                                            <td>
+                                                {call.recording_url ? (
+                                                    <button
+                                                        type="button"
+                                                        className="recording-icon-button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleSelectCall(call, { autoplay: true });
+                                                        }}
+                                                    >
+                                                        <PlayCircle size={16} />
+                                                        <span>Play</span>
+                                                    </button>
+                                                ) : (
+                                                    '-'
+                                                )}
+                                            </td>
+                                            <td>
+                                                {call.outcome ? (
+                                                    <span className="outcome-text">{call.outcome.replace('_', ' ')}</span>
+                                                ) : (
+                                                    '-'
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
 
                     {selectedCall && (
-                        <div className="call-details-panel">
-                            <h2>Call Details</h2>
-                            <div className="call-details-grid">
-                                <div>
-                                    <strong>Direction:</strong> {selectedCall.direction}
-                                </div>
-                                <div>
-                                    <strong>Status:</strong> {selectedCall.status.replace('_', ' ')}
-                                </div>
-                                <div>
-                                    <strong>From:</strong> {selectedCall.from_number}
-                                </div>
-                                <div>
-                                    <strong>To:</strong> {selectedCall.to_number}
-                                </div>
-                                <div>
-                                    <strong>Duration:</strong> {formatDuration(selectedCall.duration_seconds)}
-                                </div>
-                                <div>
-                                    <strong>Created At:</strong> {formatDate(selectedCall.created_at)}
-                                </div>
-                                {selectedCall.started_at && (
+                        <div className="call-details-layout">
+                            <div className="call-details-panel">
+                                <h2>Call Details</h2>
+                                <div className="call-details-grid">
                                     <div>
-                                        <strong>Started At:</strong> {formatDate(selectedCall.started_at)}
+                                        <strong>Direction:</strong> {selectedCall.direction}
                                     </div>
-                                )}
-                                {selectedCall.answered_at && (
                                     <div>
-                                        <strong>Answered At:</strong> {formatDate(selectedCall.answered_at)}
+                                        <strong>Status:</strong> {selectedCall.status.replace('_', ' ')}
                                     </div>
-                                )}
-                                {selectedCall.ended_at && (
                                     <div>
-                                        <strong>Ended At:</strong> {formatDate(selectedCall.ended_at)}
+                                        <strong>From:</strong> {selectedCall.from_number}
                                     </div>
-                                )}
-                                <div>
-                                    <strong>Handled By:</strong> {selectedCall.handled_by_ai ? 'AI Agent' : 'Human'}
-                                </div>
-                                <div>
-                                    <strong>Outcome:</strong> {selectedCall.outcome ? selectedCall.outcome.replace('_', ' ') : '-'}
-                                </div>
-                                {selectedCall.escalated_to_human && (
-                                    <div className="call-details-notes">
-                                        <strong>Escalated To Human:</strong> Yes
-                                        {selectedCall.escalation_reason && (
-                                            <> – {selectedCall.escalation_reason}</>
-                                        )}
+                                    <div>
+                                        <strong>To:</strong> {selectedCall.to_number}
                                     </div>
-                                )}
-                                {selectedCall.lead_created !== undefined && (
-                                    <div className="call-details-notes">
-                                        <strong>Lead Created:</strong> {selectedCall.lead_created ? 'Yes' : 'No'}
+                                    <div>
+                                        <strong>Duration:</strong> {formatDuration(selectedCall.duration_seconds)}
                                     </div>
-                                )}
-                                {(selectedCall.sentiment_score !== undefined || selectedCall.customer_satisfaction !== undefined) && (
+                                    <div>
+                                        <strong>Created At:</strong> {formatDate(selectedCall.created_at)}
+                                    </div>
+                                    {selectedCall.started_at && (
+                                        <div>
+                                            <strong>Started At:</strong> {formatDate(selectedCall.started_at)}
+                                        </div>
+                                    )}
+                                    {selectedCall.answered_at && (
+                                        <div>
+                                            <strong>Answered At:</strong> {formatDate(selectedCall.answered_at)}
+                                        </div>
+                                    )}
+                                    {selectedCall.ended_at && (
+                                        <div>
+                                            <strong>Ended At:</strong> {formatDate(selectedCall.ended_at)}
+                                        </div>
+                                    )}
+                                    <div>
+                                        <strong>Handled By:</strong> {selectedCall.handled_by_ai ? 'AI Agent' : 'Human'}
+                                    </div>
+                                    <div>
+                                        <strong>Outcome:</strong> {selectedCall.outcome ? selectedCall.outcome.replace('_', ' ') : '-'}
+                                    </div>
+                                    {selectedCall.escalated_to_human && (
+                                        <div className="call-details-notes">
+                                            <strong>Escalated To Human:</strong> Yes
+                                            {selectedCall.escalation_reason && (
+                                                <> – {selectedCall.escalation_reason}</>
+                                            )}
+                                        </div>
+                                    )}
+                                    {selectedCall.lead_created !== undefined && (
+                                        <div className="call-details-notes">
+                                            <strong>Lead Created:</strong> {selectedCall.lead_created ? 'Yes' : 'No'}
+                                        </div>
+                                    )}
+                                    {(selectedCall.sentiment_score !== undefined || selectedCall.customer_satisfaction !== undefined) && (
+                                        <div className="call-details-notes">
+                                            {selectedCall.sentiment_score !== undefined && (
+                                                <div>
+                                                    <strong>Sentiment Score:</strong> {selectedCall.sentiment_score.toFixed(2)}
+                                                </div>
+                                            )}
+                                            {selectedCall.customer_satisfaction !== undefined && (
+                                                <div>
+                                                    <strong>Customer Satisfaction:</strong> {selectedCall.customer_satisfaction}/5
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                    {selectedCall.outcome_notes && (
+                                        <div className="call-details-notes">
+                                            <strong>Outcome Notes:</strong> {selectedCall.outcome_notes}
+                                        </div>
+                                    )}
+                                    {selectedCall.transcript_summary && (
+                                        <div className="call-details-notes">
+                                            <strong>Transcript Summary:</strong> {selectedCall.transcript_summary}
+                                        </div>
+                                    )}
+                                    
                                     <div className="call-details-notes">
-                                        {selectedCall.sentiment_score !== undefined && (
-                                            <div>
-                                                <strong>Sentiment Score:</strong> {selectedCall.sentiment_score.toFixed(2)}
+                                        <button
+                                            className="btn btn-secondary"
+                                            onClick={() => fetchTranscript(selectedCall.id)}
+                                            disabled={transcriptLoading}
+                                        >
+                                            {transcriptLoading ? 'Loading transcript...' : 'View Transcript'}
+                                        </button>
+                                        {transcriptError && (
+                                            <div className="transcript-error">
+                                                {transcriptError}
                                             </div>
                                         )}
-                                        {selectedCall.customer_satisfaction !== undefined && (
-                                            <div>
-                                                <strong>Customer Satisfaction:</strong> {selectedCall.customer_satisfaction}/5
+                                    </div>
+                                    {transcript && (
+                                        <div className="call-details-transcript">
+                                            <h3>Full Transcript</h3>
+                                            <div className="transcript-messages">
+                                                {transcript.messages.map((msg, index) => (
+                                                    <div
+                                                        key={index}
+                                                        className={`transcript-message transcript-${msg.role === 'agent' ? 'agent' : 'customer'}`}
+                                                    >
+                                                        <div className="transcript-meta">
+                                                            <span className="transcript-role">
+                                                                {msg.role === 'agent' ? 'AI / Agent' : 'Customer'}
+                                                            </span>
+                                                            <span className="transcript-timestamp">
+                                                                {formatDate(msg.timestamp)}
+                                                            </span>
+                                                        </div>
+                                                        <div className="transcript-content">
+                                                            {msg.content}
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
-                                        )}
-                                    </div>
-                                )}
-                                {selectedCall.outcome_notes && (
-                                    <div className="call-details-notes">
-                                        <strong>Outcome Notes:</strong> {selectedCall.outcome_notes}
-                                    </div>
-                                )}
-                                {selectedCall.transcript_summary && (
-                                    <div className="call-details-notes">
-                                        <strong>Transcript Summary:</strong> {selectedCall.transcript_summary}
-                                    </div>
-                                )}
-                                {selectedCall.recording_url && (
-                                    <div className="call-details-notes">
-                                        <strong>Recording:</strong>{' '}
-                                        <a href={selectedCall.recording_url} target="_blank" rel="noopener noreferrer">
-                                            Play Recording
-                                        </a>
-                                    </div>
-                                )}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
+
+                            {user?.role === 'admin' && (
+                                <div className="recordings-sidebar">
+                                    <h3>Recordings</h3>
+                                    {recordingsLoading && (
+                                        <div className="recordings-empty">
+                                            Loading recordings...
+                                        </div>
+                                    )}
+                                    {recordingsError && !recordingsLoading && (
+                                        <div className="error-message">
+                                            {recordingsError}
+                                        </div>
+                                    )}
+                                    <div className="recordings-list">
+                                        {!recordingsLoading && !recordingsError && recordings.filter(c => c.recording_url).length === 0 && (
+                                            <div className="recordings-empty">
+                                                No recordings available.
+                                            </div>
+                                        )}
+                                            {recordings
+                                                .filter(c => c.recording_url)
+                                                .map((c) => (
+                                                    <div
+                                                        key={c.id}
+                                                        className={`recording-item ${selectedCall?.id === c.id ? 'recording-selected' : ''}`}
+                                                        onClick={() => handleSelectCall(c)}
+                                                    >
+                                                        <div className="recording-main">
+                                                            <div className="recording-title">
+                                                                {c.from_number} → {c.to_number}
+                                                            </div>
+                                                            <div className="recording-meta">
+                                                                <span>{formatDate(c.created_at)}</span>
+                                                                <span>• {formatDuration(c.duration_seconds)}</span>
+                                                                <span>• {c.handled_by_ai ? 'AI' : 'Human'}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="recording-actions">
+                                                            <button
+                                                                type="button"
+                                                                className="recording-icon-button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleSelectCall(c, { autoplay: true });
+                                                                }}
+                                                            >
+                                                                <PlayCircle size={18} />
+                                                                <span>Play</span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </>
@@ -314,16 +620,15 @@ export const CallHistory: React.FC = () => {
             </div>
 
 
-            {
-                isCallModalOpen && (
-                    <OutboundCallModal
-                        onClose={() => setIsCallModalOpen(false)}
-                        onCallInitiated={() => {
-                            fetchCalls();
-                        }}
-                    />
-                )
-            }
-        </div >
+            {isCallModalOpen && (
+                <OutboundCallModal
+                    onClose={() => setIsCallModalOpen(false)}
+                    onCallInitiated={() => {
+                        fetchCalls();
+                    }}
+                />
+            )}
+            </div>
+        </div>
     );
 };

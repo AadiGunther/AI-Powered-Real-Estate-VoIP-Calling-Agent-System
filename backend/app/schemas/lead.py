@@ -149,3 +149,15 @@ class LeadListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class LeadAiSummaryResponse(BaseModel):
+    lead_id: int
+    lead_quality_score: int = Field(..., ge=0, le=100)
+    engagement_level: str
+    likelihood_to_convert: int = Field(..., ge=0, le=100)
+    recommended_next_actions: List[str]
+    key_conversation_points: List[str]
+    patterns: List[str]
+    generated_at: datetime
+    source_call_ids: List[int] = []

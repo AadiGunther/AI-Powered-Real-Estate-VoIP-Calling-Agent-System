@@ -197,21 +197,53 @@
 
 .notification-dropdown {
     position: absolute;
-    top: 32px;
+    top: 40px;
     right: 0;
-    width: 320px;
-    max-height: 360px;
-    background: white;
-    border-radius: var(--radius-md);
-    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.15);
-    overflow: hidden;
+    width: 360px;
+    max-height: 440px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 16px 48px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.06);
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     z-index: 1000;
+    animation: notifSlideDown 0.2s ease;
+}
+
+@keyframes notifSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.notification-dropdown-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.notification-dropdown-header span:last-child {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--accent-primary);
+    cursor: pointer;
 }
 
 .notification-empty {
-    padding: 1rem;
+    padding: 2rem 1rem;
     font-size: 0.875rem;
     color: var(--text-muted);
     text-align: center;
@@ -227,6 +259,12 @@
     align-items: flex-start;
     text-align: left;
     cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+    transition: background 0.15s ease;
+}
+
+.notification-item:last-child {
+    border-bottom: none;
 }
 
 .notification-item:hover {
@@ -234,22 +272,40 @@
 }
 
 .notification-item.read {
-    background: var(--bg-secondary);
+    opacity: 0.6;
+}
+
+.notification-item:not(.read) {
+    border-left: 3px solid var(--accent-primary);
 }
 
 .notification-message {
     font-size: 0.85rem;
     color: var(--text-primary);
+    line-height: 1.4;
 }
 
 .notification-meta {
-    margin-top: 0.25rem;
-    font-size: 0.75rem;
+    margin-top: 0.35rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .notification-type {
     text-transform: capitalize;
+    background: rgba(99, 102, 241, 0.15);
+    color: var(--accent-primary);
+    padding: 0.1rem 0.4rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.65rem;
+    font-weight: 500;
+}
+
+.notification-time {
+    color: var(--text-muted);
 }
 
 .page-content {

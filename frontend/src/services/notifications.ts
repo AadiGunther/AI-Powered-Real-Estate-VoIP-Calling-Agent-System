@@ -1,4 +1,5 @@
 import api from './api';
+import toast from 'react-hot-toast';
 import type {
     Notification,
     NotificationListResponse,
@@ -68,6 +69,10 @@ export function connectNotificationWebSocket(): void {
         try {
             const payload = JSON.parse(event.data) as Notification;
             useNotificationStore.getState().addNotification(payload);
+            toast(payload.message, {
+                icon: '🔔',
+                duration: 4000,
+            });
         } catch {
         }
     };

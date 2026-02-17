@@ -13,6 +13,7 @@ from app.database import Base
 class AppointmentStatus(str, Enum):
     """Appointment lifecycle status."""
     SCHEDULED = "scheduled"
+    CONFIRMED = "confirmed"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     NO_SHOW = "no_show"
@@ -51,4 +52,3 @@ class Appointment(Base):
 
     def __repr__(self) -> str:
         return f"<Appointment {self.id} ({self.status})>"
-

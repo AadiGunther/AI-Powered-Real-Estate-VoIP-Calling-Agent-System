@@ -12,6 +12,7 @@ import { LeadList } from './pages/leads/LeadList';
 import { CallHistory } from './pages/calls/CallHistory';
 import { Reports } from './pages/reports/Reports';
 import { UserManagement } from './pages/admin/UserManagement';
+import { Appointments } from './pages/appointments/Appointments';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { isAuthenticated, setUser } = useAuthStore();
@@ -40,7 +41,10 @@ const App: React.FC = () => {
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
             <Route path="/properties" element={<ProtectedRoute><PropertyList /></ProtectedRoute>} />
             <Route path="/leads" element={<ProtectedRoute><LeadList /></ProtectedRoute>} />
+            <Route path="/appointments" element={<ProtectedRoute><Appointments /></ProtectedRoute>} />
             <Route path="/calls" element={<ProtectedRoute><CallHistory /></ProtectedRoute>} />
+            <Route path="/calls/received" element={<ProtectedRoute><CallHistory receptionFilter="received" /></ProtectedRoute>} />
+            <Route path="/calls/failed" element={<ProtectedRoute><CallHistory receptionFilter="not_received" /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
             <Route path="/admin/products" element={<ProtectedRoute><ProductAdmin /></ProtectedRoute>} />

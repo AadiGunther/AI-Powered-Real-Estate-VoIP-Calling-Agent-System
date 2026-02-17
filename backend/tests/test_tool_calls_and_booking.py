@@ -11,77 +11,11 @@ from app.models.lead import Lead, LeadSource, LeadQuality, LeadStatus
 from app.models.appointment import Appointment
 from app.models.enquiry import Enquiry, EnquiryType
 from app.api.calls import (
-    tool_log_call,
-    ToolLogCallRequest,
     tool_book_appointment,
     ToolBookAppointmentRequest,
     tool_start_call,
     ToolStartCallRequest,
 )
-
-
-@pytest.mark.asyncio
-async def test_tool_log_call_outbound_from_and_to_numbers():
-    async with async_session_maker() as db:  # type: AsyncSession
-        external_call_id = "TEST_TOOL_LOG_OUTBOUND"
-        start_payload = ToolStartCallRequest(
-            external_call_id=external_call_id,
-            direction=CallDirection.OUTBOUND,
-            from_number=settings.twilio_phone_number,
-            to_number="+19998887777",
-        )
-        start_response = await tool_start_call(payload=start_payload, db=db, api_key="test-key")
-        assert start_response.success is True
-
-        payload = ToolLogCallRequest(
-            external_call_id=external_call_id,
-            phone="+19998887777",
-            direction=CallDirection.OUTBOUND,
-            status=CallStatus.COMPLETED,
-            duration_seconds=60,
-        )
-
-        response = await tool_log_call(payload=payload, db=db, api_key="test-key")
-        assert response.success is True
-
-        result = await db.execute(select(Call).where(Call.call_sid == external_call_id))
-        call = result.scalar_one()
-
-        assert call.from_number == settings.twilio_phone_number
-        assert call.to_number == "+19998887777"
-        assert call.direction == CallDirection.OUTBOUND.value
-
-
-@pytest.mark.asyncio
-async def test_tool_log_call_inbound_from_and_to_numbers():
-    async with async_session_maker() as db:  # type: AsyncSession
-        external_call_id = "TEST_TOOL_LOG_INBOUND"
-        start_payload = ToolStartCallRequest(
-            external_call_id=external_call_id,
-            direction=CallDirection.INBOUND,
-            from_number="+18887776666",
-            to_number=settings.twilio_phone_number,
-        )
-        start_response = await tool_start_call(payload=start_payload, db=db, api_key="test-key")
-        assert start_response.success is True
-
-        payload = ToolLogCallRequest(
-            external_call_id=external_call_id,
-            phone="+18887776666",
-            direction=CallDirection.INBOUND,
-            status=CallStatus.COMPLETED,
-            duration_seconds=45,
-        )
-
-        response = await tool_log_call(payload=payload, db=db, api_key="test-key")
-        assert response.success is True
-
-        result = await db.execute(select(Call).where(Call.call_sid == external_call_id))
-        call = result.scalar_one()
-
-        assert call.from_number == "+18887776666"
-        assert call.to_number == settings.twilio_phone_number
-        assert call.direction == CallDirection.INBOUND.value
 
 
 @pytest.mark.asyncio

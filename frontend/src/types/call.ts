@@ -20,6 +20,9 @@ export interface Call {
     lead_id?: number;
     transcript_id?: string;
     properties_discussed?: string; // JSON string of IDs
+    reception_status?: 'received' | 'not_received';
+    reception_timestamp?: string;
+    caller_username?: string;
     created_at: string;
     updated_at?: string;
     lead_created?: boolean;

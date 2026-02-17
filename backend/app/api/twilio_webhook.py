@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Form, Request, Response, Query, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from twilio.twiml.voice_response import VoiceResponse, Connect, Dial
+from twilio.twiml.voice_response import VoiceResponse, Connect
 
 from app.config import settings
 from app.database import get_db
@@ -32,6 +32,11 @@ async def handle_incoming_call(
     Handle incoming Twilio call webhook.
     Returns TwiML with <Stream> to connect to our media stream WebSocket.
     """
+    response = VoiceResponse()
+    response.say("This calling flow is currently unavailable.")
+    response.hangup()
+    return Response(content=str(response), media_type="application/xml")
+
     try:
         # Get data from either Form or Query
         if request.method == "POST":
@@ -128,6 +133,11 @@ async def handle_outbound_call(
     Handle outbound Twilio call TwiML logic.
     Returns TwiML with <Stream> to connect to our media stream WebSocket.
     """
+    response = VoiceResponse()
+    response.say("This calling flow is currently unavailable.")
+    response.hangup()
+    return Response(content=str(response), media_type="application/xml")
+
     try:
         # Get data from either Form or Query
         if request.method == "POST":
@@ -176,6 +186,57 @@ async def handle_outbound_call(
         import traceback
         traceback.print_exc()
         logger.error("outbound_webhook_failed", error=str(e), call_sid=CallSid)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/elevenlabs-outbound")
+async def handle_elevenlabs_outbound_call(
+    CallSid: str = Form(..., alias="CallSid"),
+    From: str = Form(..., alias="From"),
+    To: str = Form(..., alias="To"),
+    voice_id: str = Query(...),
+) -> Response:
+    """
+    TwiML for outbound calls that stream audio directly to ElevenLabs realtime WebSocket.
+    """
+    try:
+        if not settings.elevenlabs_realtime_ws_url:
+            logger.error("elevenlabs_realtime_ws_url_not_configured")
+            raise HTTPException(
+                status_code=500,
+                detail="ElevenLabs realtime WebSocket URL is not configured.",
+            )
+
+        logger.info(
+            "elevenlabs_outbound_twiml_request",
+            call_sid=CallSid,
+            from_number=From,
+            to_number=To,
+            voice_id=voice_id,
+        )
+
+        response = VoiceResponse()
+
+        connect = Connect()
+        stream = connect.stream(url=settings.elevenlabs_realtime_ws_url)
+        stream.parameter(name="call_sid", value=CallSid)
+        stream.parameter(name="from_number", value=From)
+        stream.parameter(name="to_number", value=To)
+        stream.parameter(name="voice_id", value=voice_id)
+
+        response.append(connect)
+
+        return Response(
+            content=str(response),
+            media_type="application/xml",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.error("elevenlabs_outbound_twiml_failed", error=str(e), call_sid=CallSid)
         raise HTTPException(status_code=500, detail=str(e))
         
 @router.post("/call-status")

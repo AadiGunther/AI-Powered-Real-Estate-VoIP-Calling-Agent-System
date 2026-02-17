@@ -15,6 +15,8 @@ class NotificationType(str, Enum):
     PRODUCT_CREATED = "product_created"
     PRODUCT_UPDATED = "product_updated"
     PRODUCT_DELETED = "product_deleted"
+    APPOINTMENT_BOOKED = "appointment_booked"
+    CALL_REPORT_GENERATED = "call_report_generated"
 
 
 class Notification(Base):
@@ -26,6 +28,7 @@ class Notification(Base):
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     related_lead_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    related_call_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -41,4 +44,3 @@ class NotificationPreference(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-

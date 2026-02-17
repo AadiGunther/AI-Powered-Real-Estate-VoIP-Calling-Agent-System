@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Optional, List, Dict
 import base64
+import re
 
 import asyncio
 import httpx
@@ -20,8 +21,6 @@ from app.database import async_session_maker
 from app.models.call import Call, CallStatus
 from app.models.elevenlabs_event_log import ElevenLabsEventLog
 from app.services.blob_service import BlobService
-from app.services.report_service import ReportService
-from app.services.stt_service import STTService
 from app.utils.logging import get_logger
 
 
@@ -42,19 +41,6 @@ def _safe_log(level: str, event: str, **kwargs: Any) -> None:
 
 
 def _extract_call_sid(data: dict) -> Optional[str]:
-    for key in ("call_id", "call_sid", "external_call_id"):
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    conv_id = data.get("conversation_id")
-    if isinstance(conv_id, str) and conv_id.strip():
-        return conv_id.strip()
-    metadata = data.get("metadata") or {}
-    if isinstance(metadata, dict):
-        for key in ("call_sid", "twilio_call_sid", "external_call_id", "call_id"):
-            v = metadata.get(key)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
     cid = data.get("conversation_initiation_client_data") or {}
     if isinstance(cid, dict):
         dyn = cid.get("dynamic_variables") or {}
@@ -63,6 +49,23 @@ def _extract_call_sid(data: dict) -> Optional[str]:
                 v = dyn.get(key)
                 if isinstance(v, str) and v.strip():
                     return v.strip()
+
+    metadata = data.get("metadata") or {}
+    if isinstance(metadata, dict):
+        for key in ("call_sid", "twilio_call_sid", "external_call_id", "call_id"):
+            v = metadata.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+
+    for key in ("call_id", "call_sid", "external_call_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    conv_id = data.get("conversation_id")
+    if isinstance(conv_id, str) and conv_id.strip():
+        return conv_id.strip()
+
     return None
 
 
@@ -89,6 +92,31 @@ def _extract_transcript_and_summary(data: dict) -> tuple[str, str]:
     return transcript_text, summary_text
 
 
+def _extract_username_from_transcript(transcript_text: str) -> Optional[str]:
+    if not transcript_text:
+        return None
+    text = transcript_text.strip()
+    if not text:
+        return None
+    patterns = [
+        r"\bmy name is\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})",
+        r"\bthis is\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})",
+        r"\bhi[, ]+i['’]?m\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})",
+        r"\bi am\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})",
+    ]
+    lower = text.lower()
+    for pattern in patterns:
+        match = re.search(pattern, lower, re.IGNORECASE)
+        if not match:
+            continue
+        start, end = match.span(1)
+        candidate = text[start:end].strip()
+        cleaned = re.sub(r"[^A-Za-z\s'-]", "", candidate).strip()
+        if 1 < len(cleaned) <= 60:
+            return cleaned
+    return None
+
+
 async def _ensure_call_initialized(
     db: AsyncSession,
     call_sid: str,
@@ -104,8 +132,23 @@ async def _ensure_call_initialized(
     direction = str(direction_raw).lower() if direction_raw else ""
     if direction not in {"inbound", "outbound"}:
         direction = "inbound"
-    from_number = data.get("from_number") or data.get("from") or ""
-    to_number = data.get("to_number") or data.get("to") or ""
+
+    raw_from = (
+        data.get("from_number")
+        or data.get("from")
+        or data.get("phone_number")
+        or data.get("phone")
+    )
+    raw_to = (
+        data.get("to_number")
+        or data.get("to")
+        or data.get("phone_number")
+        or data.get("phone")
+    )
+
+    from_number = str(raw_from or settings.twilio_phone_number or "unknown")
+    to_number = str(raw_to or from_number or settings.twilio_phone_number or "unknown")
+
     if not from_number or not to_number:
         _safe_log(
             "error",
@@ -352,10 +395,28 @@ async def _handle_post_call_transcription(
 
     transcript, summary = _extract_transcript_and_summary(data)
 
+    conv_id = data.get("conversation_id")
+    if isinstance(conv_id, str) and conv_id.strip():
+        if not getattr(call, "parent_call_sid", None):
+            call.parent_call_sid = conv_id.strip()
+
     if transcript:
         call.transcript_text = transcript
     if summary:
         call.transcript_summary = summary
+
+    username = _extract_username_from_transcript(transcript)
+    if username:
+        call.caller_username = username
+
+    if call.status == CallStatus.COMPLETED.value or call.answered_at is not None or bool(transcript):
+        call.reception_status = "received"
+    else:
+        call.reception_status = "not_received"
+
+    if call.reception_timestamp is None:
+        call.reception_timestamp = datetime.fromtimestamp(event_timestamp, tz=timezone.utc)
+
     call.webhook_processed_at = datetime.now(timezone.utc)
     if call.status != CallStatus.COMPLETED.value:
         call.status = CallStatus.COMPLETED.value
@@ -410,6 +471,11 @@ async def _handle_post_call_audio(
 
     result = await db.execute(select(Call).where(Call.call_sid == call_sid))
     call = result.scalar_one_or_none()
+
+    if not call and call_sid.startswith("conv_"):
+        fallback = await db.execute(select(Call).where(Call.parent_call_sid == call_sid))
+        call = fallback.scalar_one_or_none()
+
     if not call:
         call = await _ensure_call_initialized(
             db=db,
@@ -457,7 +523,12 @@ async def _handle_post_call_audio(
     recording_duration = data.get("duration_seconds")
 
     audio_bytes = b""
-    audio_base64 = data.get("audio") or data.get("audio_base64")
+    audio_base64 = (
+        data.get("audio")
+        or data.get("audio_base64")
+        or data.get("full_audio")
+        or data.get("full_audio_base64")
+    )
     if isinstance(audio_base64, str) and audio_base64:
         try:
             audio_bytes = base64.b64decode(audio_base64)
@@ -578,55 +649,13 @@ async def _handle_post_call_audio(
     if not await _commit_with_retry(db, "post_call_audio"):
         return
 
-    transcript_generated = False
-    if audio_bytes and not call.transcript_text:
-        _safe_log(
-            "info",
-            "elevenlabs_stt_start",
-            call_sid=call_sid,
-        )
-        stt_service = STTService()
-        transcript_text = await stt_service.transcribe_audio(
-            audio_bytes,
-            file_name=f"{call_sid}_{event_timestamp}.mp3",
-        )
-        if transcript_text:
-            _safe_log(
-                "info",
-                "elevenlabs_stt_success",
-                call_sid=call_sid,
-                transcript_chars=len(transcript_text),
-            )
-            async with async_session_maker() as db2:
-                result2 = await db2.execute(select(Call).where(Call.call_sid == call_sid))
-                call2 = result2.scalar_one_or_none()
-                if call2:
-                    call2.transcript_text = transcript_text
-                    call2.webhook_processed_at = datetime.now(timezone.utc)
-                    await db2.flush()
-                    await _commit_with_retry(db2, "post_call_audio_stt")
-                    transcript_generated = True
-
-            report_service = ReportService()
-            _safe_log(
-                "info",
-                "elevenlabs_report_generation_start",
-                call_sid=call_sid,
-            )
-            await report_service.generate_report(call_sid=call_sid, transcript=transcript_text)
-            _safe_log(
-                "info",
-                "elevenlabs_report_generation_complete",
-                call_sid=call_sid,
-            )
-
     _safe_log(
         "info",
         "elevenlabs_post_call_audio_processed",
         call_sid=call_sid,
         event_timestamp=event_timestamp,
         has_recording=bool(call.recording_url),
-        transcript_generated=transcript_generated,
+        transcript_generated=False,
     )
 
 

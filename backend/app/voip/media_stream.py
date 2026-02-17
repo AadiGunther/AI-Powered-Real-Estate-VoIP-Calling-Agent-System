@@ -16,7 +16,6 @@ from app.database import async_session_maker
 from app.models.call import Call, CallStatus
 from app.voip.realtime_client import RealtimeClient
 from app.voip.prompts import REAL_ESTATE_ASSISTANT_PROMPT, GREETING_MESSAGE
-from app.services.report_service import ReportService
 from app.services.rag_service import RAGService
 from app.utils.logging import get_logger
 
@@ -118,15 +117,6 @@ async def media_stream_websocket(websocket: WebSocket):
 
     finally:
         if client:
-            transcript = client.get_transcript()
-            if transcript:
-                asyncio.create_task(
-                    ReportService().generate_report(
-                        call_sid=call_sid,
-                        transcript=transcript,
-                        transcript_messages=client.transcript,
-                    )
-                )
             await client.close()
 
         if call_sid:

@@ -4,7 +4,8 @@ export type NotificationType =
     | 'lead_status_changed'
     | 'product_created'
     | 'product_updated'
-    | 'product_deleted';
+    | 'product_deleted'
+    | 'appointment_booked';
 
 export interface Notification {
     id: number;

@@ -1,8 +1,9 @@
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict
+from urllib.parse import urlparse
 
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
 
 from app.config import settings
 from app.utils.logging import get_logger
@@ -104,6 +105,68 @@ class BlobService:
                 await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
 
         return None
+
+    def _parse_account_credentials(self) -> Optional[Dict[str, str]]:
+        if not self.connection_string:
+            logger.warning("blob_sas_missing_connection_string")
+            return None
+        parts: Dict[str, str] = {}
+        for segment in self.connection_string.split(";"):
+            if "=" in segment:
+                key, value = segment.split("=", 1)
+                parts[key] = value
+        account_name = parts.get("AccountName")
+        account_key = parts.get("AccountKey")
+        if not account_name or not account_key:
+            logger.error("blob_sas_missing_account_credentials")
+            return None
+        return {"account_name": account_name, "account_key": account_key}
+
+    def generate_sas_for_blob(
+        self,
+        container_name: str,
+        blob_name: str,
+        expiry_minutes: int = 15,
+    ) -> Optional[str]:
+        if not self.client:
+            logger.warning("blob_sas_client_not_configured")
+            return None
+
+        creds = self._parse_account_credentials()
+        if not creds:
+            return None
+
+        try:
+            sas_token = generate_blob_sas(
+                account_name=creds["account_name"],
+                container_name=container_name,
+                blob_name=blob_name,
+                account_key=creds["account_key"],
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.utcnow() + timedelta(minutes=expiry_minutes),
+            )
+            blob_client = self.client.get_blob_client(container=container_name, blob=blob_name)
+            return f"{blob_client.url}?{sas_token}"
+        except Exception as e:
+            logger.error(
+                "blob_sas_generation_failed",
+                error=str(e),
+                container_name=container_name,
+                blob_name=blob_name,
+            )
+            return None
+
+    def generate_sas_from_blob_url(self, blob_url: str, expiry_minutes: int = 15) -> Optional[str]:
+        if not blob_url:
+            logger.warning("blob_sas_missing_blob_url")
+            return None
+        parsed = urlparse(blob_url)
+        path = parsed.path.lstrip("/")
+        if not path or "/" not in path:
+            logger.error("blob_sas_invalid_blob_url", blob_url=blob_url)
+            return None
+        container_name, blob_name = path.split("/", 1)
+        return self.generate_sas_for_blob(container_name, blob_name, expiry_minutes=expiry_minutes)
 
     async def delete_older_than(self, days: int) -> int:
         if not self.client:

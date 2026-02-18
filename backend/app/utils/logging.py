@@ -61,11 +61,20 @@ class CallLogger:
     
     def audio_received(self, chunk_size: int) -> None:
         """Log audio chunk received."""
-        self.logger.debug("audio_chunk_received", call_sid=self.call_sid, chunk_size=chunk_size)
+        self.logger.debug(
+            "audio_chunk_received",
+            call_sid=self.call_sid,
+            chunk_size=chunk_size,
+        )
     
     def stt_result(self, transcript: str, is_final: bool) -> None:
         """Log STT result."""
-        self.logger.info("stt_result", call_sid=self.call_sid, transcript=transcript, is_final=is_final)
+        self.logger.info(
+            "stt_result",
+            call_sid=self.call_sid,
+            transcript=transcript,
+            is_final=is_final,
+        )
     
     def ai_response(self, response: str) -> None:
         """Log AI response."""

@@ -2,12 +2,15 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import DateTime, Float, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.call import Call
 
 
 class LeadQuality(str, Enum):
@@ -74,7 +77,10 @@ class Lead(Base):
     assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
     # Follow-up
-    next_follow_up: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_follow_up: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     follow_up_count: Mapped[int] = mapped_column(Integer, default=0)
     
     # Conversion
@@ -91,6 +97,8 @@ class Lead(Base):
     last_contacted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    calls: Mapped[list["Call"]] = relationship("Call", back_populates="lead")
 
     def __repr__(self) -> str:
         return f"<Lead {self.phone} ({self.quality})>"

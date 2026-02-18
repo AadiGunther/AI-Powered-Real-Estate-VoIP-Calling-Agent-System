@@ -153,7 +153,11 @@ export const UserManagement: React.FC = () => {
                         </thead>
                         <tbody>
                             {users.map((user) => (
-                                <tr key={user.id}>
+                                <tr
+                                    key={user.id}
+                                    onClick={() => openEdit(user)}
+                                    style={{ cursor: 'pointer' }}
+                                >
                                     <td>
                                         <div className="lead-contact">
                                             <div className="lead-avatar">
@@ -185,13 +189,19 @@ export const UserManagement: React.FC = () => {
                                         <div className="action-buttons">
                                             <button
                                                 className="btn btn-ghost btn-sm"
-                                                onClick={() => openEdit(user)}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    openEdit(user);
+                                                }}
                                             >
                                                 <Edit size={14} />
                                             </button>
                                             <button
                                                 className="btn btn-ghost btn-sm"
-                                                onClick={() => handleDelete(user)}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    handleDelete(user);
+                                                }}
                                             >
                                                 <Trash2 size={14} />
                                             </button>

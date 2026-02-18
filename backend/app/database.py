@@ -3,7 +3,8 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from sqlalchemy import text, inspect as sa_inspect
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -39,86 +40,115 @@ def _migrate_calls_table(connection) -> None:
 
     dialect = connection.dialect.name
 
+    def _add_column_sqlite(name: str, column_def: str) -> None:
+        connection.execute(text(f"ALTER TABLE calls ADD COLUMN {name} {column_def}"))
+
+    def _add_column_postgres(name: str, column_def: str) -> None:
+        connection.execute(text(f"ALTER TABLE calls ADD COLUMN IF NOT EXISTS {name} {column_def}"))
+
+    def _add_column_generic(name: str, column_def: str) -> None:
+        connection.execute(text(f"ALTER TABLE calls ADD COLUMN {name} {column_def}"))
+
+    def _add_column(
+        name: str,
+        sqlite_def: str,
+        pg_def: str | None = None,
+        generic_def: str | None = None,
+    ) -> None:
+        if name in columns:
+            return
+        if dialect == "sqlite":
+            _add_column_sqlite(name, sqlite_def)
+        elif dialect == "postgresql":
+            _add_column_postgres(name, pg_def or sqlite_def)
+        else:
+            _add_column_generic(name, generic_def or sqlite_def)
+
     if "webhook_processed_at" not in columns:
         try:
-            if dialect == "sqlite":
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN webhook_processed_at DATETIME")
-                )
-            elif dialect == "postgresql":
-                connection.execute(
-                    text(
-                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS webhook_processed_at TIMESTAMPTZ"
-                    )
-                )
-            else:
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN webhook_processed_at TIMESTAMP")
-                )
+            _add_column("webhook_processed_at", "DATETIME", "TIMESTAMPTZ", "TIMESTAMP")
         except Exception:
             return
 
-    if "reception_status" not in columns:
+    to_add: list[tuple[str, str, str, str]] = [
+        ("parent_call_sid", "VARCHAR(50)", "VARCHAR(50)", "VARCHAR(50)"),
+        ("answered_at", "DATETIME", "TIMESTAMPTZ", "TIMESTAMP"),
+        ("ended_at", "DATETIME", "TIMESTAMPTZ", "TIMESTAMP"),
+        ("duration_seconds", "INTEGER", "INTEGER", "INTEGER"),
+        ("handled_by_ai", "BOOLEAN", "BOOLEAN", "BOOLEAN"),
+        ("escalated_to_human", "BOOLEAN", "BOOLEAN", "BOOLEAN"),
+        ("escalated_to_agent_id", "INTEGER", "INTEGER", "INTEGER"),
+        ("escalation_reason", "VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)"),
+        ("recording_url", "VARCHAR(500)", "VARCHAR(500)", "VARCHAR(500)"),
+        ("recording_sid", "VARCHAR(50)", "VARCHAR(50)", "VARCHAR(50)"),
+        ("recording_duration", "INTEGER", "INTEGER", "INTEGER"),
+        ("transcript_text", "TEXT", "TEXT", "TEXT"),
+        ("transcript_summary", "TEXT", "TEXT", "TEXT"),
+        ("reception_status", "VARCHAR(20)", "VARCHAR(20)", "VARCHAR(20)"),
+        ("reception_timestamp", "DATETIME", "TIMESTAMPTZ", "TIMESTAMP"),
+        ("caller_username", "VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)"),
+        ("structured_report", "TEXT", "TEXT", "TEXT"),
+        ("outcome", "VARCHAR(50)", "VARCHAR(50)", "VARCHAR(50)"),
+        ("outcome_notes", "TEXT", "TEXT", "TEXT"),
+        ("lead_id", "INTEGER", "INTEGER", "INTEGER"),
+        ("lead_created", "BOOLEAN", "BOOLEAN", "BOOLEAN"),
+        ("properties_discussed", "TEXT", "TEXT", "TEXT"),
+        ("sentiment_score", "REAL", "DOUBLE PRECISION", "DOUBLE"),
+        ("customer_satisfaction", "INTEGER", "INTEGER", "INTEGER"),
+    ]
+
+    for name, sqlite_def, pg_def, generic_def in to_add:
         try:
-            if dialect == "sqlite":
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN reception_status VARCHAR(20)")
-                )
-            elif dialect == "postgresql":
-                connection.execute(
-                    text(
-                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS reception_status VARCHAR(20)"
-                    )
-                )
-            else:
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN reception_status VARCHAR(20)")
-                )
+            _add_column(name, sqlite_def, pg_def, generic_def)
         except Exception:
             return
 
-    if "reception_timestamp" not in columns:
-        try:
-            if dialect == "sqlite":
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN reception_timestamp DATETIME")
-                )
-            elif dialect == "postgresql":
-                connection.execute(
-                    text(
-                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS reception_timestamp TIMESTAMPTZ"
-                    )
-                )
-            else:
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN reception_timestamp TIMESTAMP")
-                )
-        except Exception:
-            return
 
-    if "caller_username" not in columns:
-        try:
-            if dialect == "sqlite":
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN caller_username VARCHAR(255)")
-                )
-            elif dialect == "postgresql":
-                connection.execute(
-                    text(
-                        "ALTER TABLE calls ADD COLUMN IF NOT EXISTS caller_username VARCHAR(255)"
-                    )
-                )
-            else:
-                connection.execute(
-                    text("ALTER TABLE calls ADD COLUMN caller_username VARCHAR(255)")
-                )
-        except Exception:
+def _migrate_notifications_table(connection) -> None:
+    inspector = sa_inspect(connection)
+    try:
+        columns = {col["name"] for col in inspector.get_columns("notifications")}
+    except Exception:
+        return
+
+    dialect = connection.dialect.name
+
+    def _add_column_sqlite(name: str, column_def: str) -> None:
+        connection.execute(text(f"ALTER TABLE notifications ADD COLUMN {name} {column_def}"))
+
+    def _add_column_postgres(name: str, column_def: str) -> None:
+        connection.execute(
+            text(f"ALTER TABLE notifications ADD COLUMN IF NOT EXISTS {name} {column_def}")
+        )
+
+    def _add_column_generic(name: str, column_def: str) -> None:
+        connection.execute(text(f"ALTER TABLE notifications ADD COLUMN {name} {column_def}"))
+
+    def _add_column(
+        name: str,
+        sqlite_def: str,
+        pg_def: str | None = None,
+        generic_def: str | None = None,
+    ) -> None:
+        if name in columns:
             return
+        if dialect == "sqlite":
+            _add_column_sqlite(name, sqlite_def)
+        elif dialect == "postgresql":
+            _add_column_postgres(name, pg_def or sqlite_def)
+        else:
+            _add_column_generic(name, generic_def or sqlite_def)
+
+    try:
+        _add_column("related_call_id", "INTEGER", "INTEGER", "INTEGER")
+    except Exception:
+        return
 
 
 def _init_and_migrate(connection) -> None:
     Base.metadata.create_all(connection)
     _migrate_calls_table(connection)
+    _migrate_notifications_table(connection)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

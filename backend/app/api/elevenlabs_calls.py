@@ -1,20 +1,21 @@
-from typing import Any, Dict, Optional
-import hmac
 import hashlib
+import hmac
 import time
 import uuid
+from datetime import datetime
+from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db
+from app.models.call import Call, CallDirection, CallStatus
 from app.utils.logging import get_logger
 from app.utils.utils import clean_indian_number
-from app.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.call import Call, CallStatus, CallDirection
-
 
 router = APIRouter(prefix="/api", tags=["ElevenLabs Calls"])
 logger = get_logger("api.elevenlabs_calls")
@@ -146,7 +147,7 @@ async def start_call(
         from_number=settings.twilio_phone_number,
         to_number=formatted_number,
         status=CallStatus.INITIATED.value,
-        started_at=None,
+        started_at=datetime.now(ZoneInfo("Asia/Kolkata")),
         handled_by_ai=True,
     )
     db.add(db_call)

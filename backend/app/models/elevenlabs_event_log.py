@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Integer, String, func, UniqueConstraint
+from sqlalchemy import DateTime, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -10,7 +10,12 @@ from app.database import Base
 class ElevenLabsEventLog(Base):
     __tablename__ = "elevenlabs_event_log"
     __table_args__ = (
-        UniqueConstraint("call_sid", "event_type", "event_timestamp", name="uq_call_event_timestamp"),
+        UniqueConstraint(
+            "call_sid",
+            "event_type",
+            "event_timestamp",
+            name="uq_call_event_timestamp",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -22,4 +27,3 @@ class ElevenLabsEventLog(Base):
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="processed")
     error: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-

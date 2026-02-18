@@ -438,7 +438,11 @@ export const ProductAdmin: React.FC = () => {
                             </thead>
                             <tbody>
                                 {products.map((product) => (
-                                    <tr key={product.id}>
+                                    <tr
+                                        key={product.id}
+                                        onClick={() => handleEdit(product)}
+                                        style={{ cursor: 'pointer' }}
+                                    >
                                         <td>{product.name}</td>
                                         <td>{product.model_number}</td>
                                         <td>{product.type.replace('_', ' ')}</td>
@@ -450,13 +454,19 @@ export const ProductAdmin: React.FC = () => {
                                         <td>
                                             <button
                                                 className="btn btn-secondary btn-icon"
-                                                onClick={() => handleEdit(product)}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    handleEdit(product);
+                                                }}
                                             >
                                                 <Edit2 size={14} />
                                             </button>
                                             <button
                                                 className="btn btn-danger btn-icon"
-                                                onClick={() => handleDelete(product.id)}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    handleDelete(product.id);
+                                                }}
                                             >
                                                 <Trash2 size={14} />
                                             </button>
@@ -471,4 +481,3 @@ export const ProductAdmin: React.FC = () => {
         </div>
     );
 };
-

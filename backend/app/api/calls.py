@@ -1,41 +1,49 @@
 """Calls API endpoints."""
 
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
-from typing import Optional, Dict
-import time
 import asyncio
+import re
+import time
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Header
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, EmailStr
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+try:
+    from twilio.base.exceptions import TwilioRestException
+    from twilio.rest import Client as TwilioClient
+except ImportError:
+    TwilioRestException = Exception
+    TwilioClient = None
 
 from app.config import settings
 from app.database import get_db
-from app.models.user import User, UserRole
-from app.models.call import Call, CallStatus, CallOutcome, CallDirection
-from app.models.lead import Lead, LeadQuality, LeadStatus, LeadSource
-from app.models.enquiry import Enquiry, EnquiryType
 from app.models.appointment import Appointment, AppointmentStatus
+from app.models.call import Call, CallDirection, CallStatus
+from app.models.enquiry import Enquiry, EnquiryType
+from app.models.lead import Lead, LeadQuality, LeadSource, LeadStatus
 from app.models.notification import NotificationType
+from app.models.user import User, UserRole
 from app.schemas.call import (
-    CallResponse,
     CallListResponse,
-    CallOutcomeUpdate,
     CallNotesUpdate,
+    CallOutcomeUpdate,
+    CallResponse,
     CallTranscript,
-    TranscriptMessage,
     DialRequest,
+    TranscriptMessage,
 )
 from app.services.blob_service import BlobService
 from app.services.notification_service import NotificationService
-from app.utils.security import get_current_user
 from app.utils.logging import get_logger
+from app.utils.security import get_current_user
 from app.utils.utils import clean_indian_number
-from pydantic import BaseModel, EmailStr
-from twilio.rest import Client as TwilioClient
-from twilio.base.exceptions import TwilioRestException
 
 router = APIRouter()
 
@@ -83,10 +91,20 @@ async def dial_number(
 ) -> Call:
     """Initiate an outbound call."""
     try:
+        if TwilioClient is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Twilio is not available on this server.",
+            )
         if not settings.enable_existing_outbound_flow:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Existing outbound Twilio call flow is disabled by configuration.",
+            )
+        if not settings.twilio_account_sid or not settings.twilio_auth_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Twilio credentials are not configured.",
             )
 
         client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
@@ -140,7 +158,10 @@ async def dial_number(
         if e.code == 21219:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Twilio Trial Account Restriction: The destination number is not verified. Please verify the number in your Twilio console or upgrade your account."
+                detail=(
+                    "Twilio Trial Account Restriction: The destination number is not verified. "
+                    "Please verify the number in your Twilio console or upgrade your account."
+                ),
             )
         elif e.code == 21214:
             raise HTTPException(
@@ -331,20 +352,281 @@ async def get_call_recording(
         )
 
     blob_service = BlobService()
-    sas_url = blob_service.generate_sas_from_blob_url(call.recording_url, expiry_minutes=15)
-    if not sas_url:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate recording URL",
+
+    def _extract_container_and_blob_name(url: str) -> tuple[Optional[str], Optional[str]]:
+        cleaned = str(url or "").strip().strip("`").strip().replace("`", "")
+        if not cleaned:
+            return None, None
+        parsed = urlparse(cleaned)
+        path = parsed.path.lstrip("/")
+        if not path or "/" not in path:
+            return None, None
+        container, blob_name = path.split("/", 1)
+        return (container or None), (blob_name or None)
+
+    def _derive_elevenlabs_blob_name() -> Optional[str]:
+        call_sid = str(call.call_sid or "").strip()
+        match = re.search(r"(\d{10,13})$", call_sid)
+        if not match:
+            return None
+        raw = match.group(1)
+        ts = int(raw)
+        event_ts = ts // 1000 if len(raw) == 13 else ts
+
+        dt = call.started_at or call.ended_at or datetime.now(ZoneInfo("Asia/Kolkata"))
+        if getattr(dt, "tzinfo", None) is None:
+            dt = dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+        date_prefix = dt.strftime("%Y-%m-%d")
+        return f"elevenlabs/{date_prefix}/{call_sid}_{event_ts}.mp3"
+
+    def _candidate_date_prefixes() -> list[str]:
+        tz = ZoneInfo("Asia/Kolkata")
+        dates: list[str] = []
+        for dt in [call.started_at, call.ended_at, datetime.now(tz)]:
+            if dt is None:
+                continue
+            if getattr(dt, "tzinfo", None) is None:
+                dt = dt.replace(tzinfo=tz)
+            dt = dt.astimezone(tz)
+            dates.append(dt.strftime("%Y-%m-%d"))
+        if dates:
+            try:
+                d0 = datetime.strptime(dates[0], "%Y-%m-%d")
+                dates.append((d0.replace(tzinfo=tz) - timedelta(days=1)).strftime("%Y-%m-%d"))
+            except Exception:
+                pass
+        unique_dates = list(dict.fromkeys([d for d in dates if d]))
+        return [f"elevenlabs/{d}/" for d in unique_dates]
+
+    candidates: list[str] = []
+    from_url = blob_service.generate_sas_from_blob_url(call.recording_url, expiry_minutes=15)
+    if from_url:
+        candidates.append(from_url)
+
+    container_from_url, blob_name_from_url = _extract_container_and_blob_name(call.recording_url)
+    if container_from_url and blob_name_from_url:
+        direct_from_url = blob_service.generate_sas_for_blob(
+            container_from_url,
+            blob_name_from_url,
+            expiry_minutes=15,
         )
-    sas_url = sas_url.strip().strip("`").strip()
+        if direct_from_url:
+            candidates.append(direct_from_url)
+
+    derived_blob = _derive_elevenlabs_blob_name()
+    if derived_blob:
+        for container_candidate in [
+            (blob_service.container_name or "").strip() or None,
+            (container_from_url or "").strip() or None,
+        ]:
+            if not container_candidate:
+                continue
+            derived_url = blob_service.generate_sas_for_blob(
+                container_candidate,
+                derived_blob,
+                expiry_minutes=15,
+            )
+            if derived_url:
+                candidates.append(derived_url)
+
+    call_sid_value = str(call.call_sid or "").strip()
+    if call_sid_value and blob_service.client:
+        prefixes = _candidate_date_prefixes()
+        container_candidates = list(
+            dict.fromkeys(
+                [
+                    (blob_service.container_name or "").strip(),
+                    (container_from_url or "").strip(),
+                ]
+            )
+        )
+        for container_candidate in [c for c in container_candidates if c]:
+            found_blob = await asyncio.to_thread(
+                blob_service.find_latest_blob_name,
+                prefixes,
+                call_sid_value,
+                container_candidate,
+            )
+            if found_blob:
+                searched_url = blob_service.generate_sas_for_blob(
+                    container_candidate,
+                    found_blob,
+                    expiry_minutes=15,
+                )
+                if searched_url:
+                    candidates.append(searched_url)
+
+    resolved_url: Optional[str] = None
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        for candidate in candidates:
+            cleaned = str(candidate).strip().strip("`").strip().replace("`", "")
+            try:
+                resp = await client.get(cleaned, headers={"Range": "bytes=0-0"})
+            except Exception:
+                continue
+            if 200 <= resp.status_code < 300:
+                resolved_url = cleaned
+                break
+
+    if not resolved_url:
+        container_candidates = list(
+            dict.fromkeys(
+                [
+                    (blob_service.container_name or "").strip(),
+                    (container_from_url or "").strip(),
+                ]
+            )
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recording not found in storage (containers tried: {', '.join([c for c in container_candidates if c])})",
+        )
 
     return {
         "call_id": call.id,
         "call_sid": call.call_sid,
-        "recording_url": sas_url,
+        "recording_url": resolved_url,
         "duration": call.recording_duration,
     }
+
+
+@router.get("/{call_id}/recording/stream")
+async def stream_call_recording(
+    call_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Proxy stream audio from Azure to the browser to bypass CORS/Private access."""
+    result = await db.execute(select(Call).where(Call.id == call_id))
+    call = result.scalar_one_or_none()
+    
+    if not call or not call.recording_url:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    blob_service = BlobService()
+
+    def _extract_container_and_blob_name(url: str) -> tuple[Optional[str], Optional[str]]:
+        cleaned = str(url or "").strip().strip("`").strip().replace("`", "")
+        if not cleaned:
+            return None, None
+        parsed = urlparse(cleaned)
+        path = parsed.path.lstrip("/")
+        if not path or "/" not in path:
+            return None, None
+        container, blob_name = path.split("/", 1)
+        return (container or None), (blob_name or None)
+
+    def _derive_elevenlabs_blob_name() -> Optional[str]:
+        call_sid = str(call.call_sid or "").strip()
+        match = re.search(r"(\d{10,13})$", call_sid)
+        if not match:
+            return None
+        raw = match.group(1)
+        ts = int(raw)
+        event_ts = ts // 1000 if len(raw) == 13 else ts
+
+        dt = call.started_at or call.ended_at or datetime.now(ZoneInfo("Asia/Kolkata"))
+        if getattr(dt, "tzinfo", None) is None:
+            dt = dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+        date_prefix = dt.strftime("%Y-%m-%d")
+        return f"elevenlabs/{date_prefix}/{call_sid}_{event_ts}.mp3"
+
+    def _candidate_date_prefixes() -> list[str]:
+        tz = ZoneInfo("Asia/Kolkata")
+        dates: list[str] = []
+        for dt in [call.started_at, call.ended_at, datetime.now(tz)]:
+            if dt is None:
+                continue
+            if getattr(dt, "tzinfo", None) is None:
+                dt = dt.replace(tzinfo=tz)
+            dt = dt.astimezone(tz)
+            dates.append(dt.strftime("%Y-%m-%d"))
+        if dates:
+            try:
+                d0 = datetime.strptime(dates[0], "%Y-%m-%d")
+                dates.append((d0.replace(tzinfo=tz) - timedelta(days=1)).strftime("%Y-%m-%d"))
+            except Exception:
+                pass
+        unique_dates = list(dict.fromkeys([d for d in dates if d]))
+        return [f"elevenlabs/{d}/" for d in unique_dates]
+
+    candidates: list[str] = []
+    from_url = blob_service.generate_sas_from_blob_url(call.recording_url)
+    if from_url:
+        candidates.append(from_url)
+
+    container_from_url, blob_name_from_url = _extract_container_and_blob_name(call.recording_url)
+    if container_from_url and blob_name_from_url:
+        direct_from_url = blob_service.generate_sas_for_blob(container_from_url, blob_name_from_url)
+        if direct_from_url:
+            candidates.append(direct_from_url)
+
+    derived_blob = _derive_elevenlabs_blob_name()
+    if derived_blob:
+        for container_candidate in [
+            (blob_service.container_name or "").strip() or None,
+            (container_from_url or "").strip() or None,
+        ]:
+            if not container_candidate:
+                continue
+            derived_url = blob_service.generate_sas_for_blob(container_candidate, derived_blob)
+            if derived_url:
+                candidates.append(derived_url)
+
+    call_sid_value = str(call.call_sid or "").strip()
+    if call_sid_value and blob_service.client:
+        prefixes = _candidate_date_prefixes()
+        container_candidates = list(
+            dict.fromkeys(
+                [
+                    (blob_service.container_name or "").strip(),
+                    (container_from_url or "").strip(),
+                ]
+            )
+        )
+        for container_candidate in [c for c in container_candidates if c]:
+            found_blob = await asyncio.to_thread(
+                blob_service.find_latest_blob_name,
+                prefixes,
+                call_sid_value,
+                container_candidate,
+            )
+            if found_blob:
+                searched_url = blob_service.generate_sas_for_blob(container_candidate, found_blob)
+                if searched_url:
+                    candidates.append(searched_url)
+
+    resolved_url: Optional[str] = None
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        for candidate in candidates:
+            cleaned = str(candidate).strip().strip("`").strip().replace("`", "")
+            try:
+                resp = await client.get(cleaned, headers={"Range": "bytes=0-0"})
+            except Exception:
+                continue
+            if 200 <= resp.status_code < 300:
+                resolved_url = cleaned
+                break
+
+    if not resolved_url:
+        raise HTTPException(status_code=404, detail="Recording not found in storage")
+
+    async def generate():
+        async with httpx.AsyncClient() as client:
+            try:
+                async with client.stream("GET", resolved_url) as resp:
+                    if resp.status_code != 200:
+                        yield b"Error fetching audio from storage"
+                        return
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+            except Exception as e:
+                import logging
+                logging.error(f"Streaming error: {str(e)}")
+
+    return StreamingResponse(generate(), media_type="audio/mpeg")
 
 
 @router.get("/{call_id}/transcript", response_model=CallTranscript)
@@ -476,6 +758,7 @@ class ToolBookAppointmentRequest(BaseModel):
 
 class ToolBookAppointmentResponse(BaseModel):
     success: bool
+    lead_id: Optional[int] = None
     enquiry_id: Optional[int] = None
     message: str
 
@@ -686,6 +969,7 @@ async def tool_book_appointment(
             )
             return ToolBookAppointmentResponse(
                 success=False,
+                lead_id=None,
                 enquiry_id=None,
                 message="Lead not found for appointment booking.",
             )
@@ -720,6 +1004,7 @@ async def tool_book_appointment(
             else:
                 return ToolBookAppointmentResponse(
                     success=False,
+                    lead_id=lead.id,
                     enquiry_id=None,
                     message="Call not found for appointment booking.",
                 )
@@ -740,6 +1025,15 @@ async def tool_book_appointment(
                 status=AppointmentStatus.SCHEDULED.value,
             )
             db.add(appointment)
+        else:
+            appointment.scheduled_for = payload.scheduled_for
+            appointment.address = payload.address
+            appointment.notes = payload.notes
+            if appointment.status in {
+                AppointmentStatus.CANCELLED.value,
+                AppointmentStatus.NO_SHOW.value,
+            }:
+                appointment.status = AppointmentStatus.SCHEDULED.value
         query_text = (
             f"Site visit scheduled for {payload.scheduled_for.isoformat()} at {payload.address}."
         )
@@ -762,6 +1056,9 @@ async def tool_book_appointment(
                 response_successful=True,
             )
             db.add(enquiry)
+        else:
+            enquiry.query_text = query_text
+            enquiry.response_successful = True
         lead.status = LeadStatus.QUALIFIED.value
         lead.quality = LeadQuality.WARM.value
         await db.flush()
@@ -783,18 +1080,22 @@ async def tool_book_appointment(
             )
         )
         admins = result_users.scalars().all()
+        scheduled_for_ist = appointment.scheduled_for.astimezone(ZoneInfo("Asia/Kolkata")).strftime(
+            "%Y-%m-%d %H:%M"
+        )
         for admin in admins:
             await notification_service.create_notification(
                 user_id=admin.id,
                 message=(
                     f"Appointment booked for lead {lead.phone} on "
-                    f"{appointment.scheduled_for.astimezone(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M')}"
+                    f"{scheduled_for_ist}"
                 ),
                 notification_type=NotificationType.APPOINTMENT_BOOKED,
                 related_lead_id=lead.id,
             )
         return ToolBookAppointmentResponse(
             success=True,
+            lead_id=lead.id,
             enquiry_id=enquiry.id,
             message="Appointment booked and enquiry recorded.",
         )
@@ -803,6 +1104,7 @@ async def tool_book_appointment(
         logger.error("tool_book_appointment_failed", error=str(e))
         return ToolBookAppointmentResponse(
             success=False,
+            lead_id=payload.lead_id,
             enquiry_id=None,
             message="Failed to book appointment.",
         )
@@ -944,6 +1246,16 @@ async def dial_elevenlabs_number(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only agents and managers can initiate ElevenLabs outbound calls.",
         )
+    if TwilioClient is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Twilio is not available on this server.",
+        )
+    if not settings.twilio_account_sid or not settings.twilio_auth_token:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Twilio credentials are not configured.",
+        )
 
     try:
         formatted_number = clean_indian_number(request.to_number)
@@ -1037,6 +1349,16 @@ async def human_dial_number(
             detail="Only agents and managers can initiate human outbound calls.",
         )
     try:
+        if TwilioClient is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Twilio is not available on this server.",
+            )
+        if not settings.twilio_account_sid or not settings.twilio_auth_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Twilio credentials are not configured.",
+            )
         client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
         
         call_kwargs = {
@@ -1103,6 +1425,16 @@ async def elevenlabs_dial_number(
 ) -> Call:
     logger = get_logger("api.calls")
     try:
+        if TwilioClient is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Twilio is not available on this server.",
+            )
+        if not settings.twilio_account_sid or not settings.twilio_auth_token:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Twilio credentials are not configured.",
+            )
         client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
 
         if not settings.elevenlabs_realtime_ws_url:

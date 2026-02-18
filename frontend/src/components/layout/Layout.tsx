@@ -84,7 +84,17 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     }, [user]);
 
     const handleNotificationClick = (id: number) => {
+        const notification = items.find(n => n.id === id);
         markNotificationRead(id).catch(() => { });
+
+        if (notification) {
+            if (notification.type === 'call_report_generated' && notification.related_call_id) {
+                navigate(`/calls/${notification.related_call_id}/report`);
+            } else if (notification.related_lead_id) {
+                navigate('/leads');
+            }
+        }
+        setDropdownOpen(false);
     };
 
     return (

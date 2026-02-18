@@ -324,7 +324,7 @@ export const Appointments: React.FC = () => {
                         </thead>
                         <tbody>
                             {appointments.map((appt) => (
-                                <tr key={appt.id}>
+                                <tr key={appt.id} onClick={() => openEdit(appt)} style={{ cursor: 'pointer' }}>
                                     <td>{new Date(appt.scheduled_for).toLocaleDateString()}</td>
                                     <td>{new Date(appt.scheduled_for).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
                                     <td>{appt.client_name || `Lead #${appt.lead_id}`}</td>
@@ -351,19 +351,31 @@ export const Appointments: React.FC = () => {
                                     </td>
                                     <td>
                                         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                            <button className="btn btn-secondary" onClick={() => openEdit(appt)}>
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    openEdit(appt);
+                                                }}
+                                            >
                                                 Edit
                                             </button>
                                             <button
                                                 className="btn btn-ghost"
-                                                onClick={() => fetchAppointments()}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    fetchAppointments();
+                                                }}
                                                 aria-label="Refresh list"
                                             >
                                                 <RefreshCw size={16} />
                                             </button>
                                             <button
                                                 className="btn btn-secondary"
-                                                onClick={() => handleCancel(appt.id)}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    handleCancel(appt.id);
+                                                }}
                                                 disabled={String(appt.status).toLowerCase() === 'cancelled'}
                                             >
                                                 Cancel
@@ -458,4 +470,3 @@ export const Appointments: React.FC = () => {
         </div>
     );
 };
-

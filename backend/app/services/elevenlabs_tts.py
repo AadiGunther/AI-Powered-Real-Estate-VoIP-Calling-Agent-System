@@ -6,7 +6,6 @@ import httpx
 from app.config import settings
 from app.utils.logging import get_logger
 
-
 logger = get_logger("services.elevenlabs_tts")
 
 
@@ -29,7 +28,11 @@ class ElevenLabsTTS:
             logger.error("elevenlabs_tts_disabled_missing_config")
             return
 
-        url = f"{self.base_url.rstrip('/')}/v1/text-to-speech/{self.voice_id}?output_format=ulaw_8000"
+        base_url = self.base_url.rstrip("/")
+        url = (
+            f"{base_url}/v1/text-to-speech/{self.voice_id}"
+            "?output_format=ulaw_8000"
+        )
 
         headers = {
             "xi-api-key": self.api_key,

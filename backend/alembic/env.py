@@ -8,10 +8,13 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-
 from app.config import settings
 from app.database import Base
-from app.models import user, property, lead, call, enquiry
+from app.models import call as call_model
+from app.models import enquiry as enquiry_model
+from app.models import lead as lead_model
+from app.models import property as property_model
+from app.models import user as user_model
 
 config = context.config
 
@@ -19,6 +22,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+_ = (user_model, property_model, lead_model, call_model, enquiry_model)
 
 config.set_main_option("sqlalchemy.url", settings.database_url)
 

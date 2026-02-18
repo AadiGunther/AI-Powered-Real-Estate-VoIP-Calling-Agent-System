@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -80,10 +80,13 @@ class Call(Base):
     
     # Reception status and caller info
     reception_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
-    reception_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reception_timestamp: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     caller_username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     
-    # Structured Report (Section 7)
+    # Section 7 Report
     structured_report: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     # Outcome
@@ -91,8 +94,14 @@ class Call(Base):
     outcome_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     # Lead Association
-    lead_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    lead_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("leads.id"),
+        nullable=True,
+        index=True,
+    )
     lead_created: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    lead = relationship("Lead", back_populates="calls")
     
     # Properties Discussed (stored as JSON array of IDs)
     properties_discussed: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

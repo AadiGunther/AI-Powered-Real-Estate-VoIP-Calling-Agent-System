@@ -1,6 +1,5 @@
 from typing import Final
 
-
 INDIAN_MOBILE_LENGTH: Final[int] = 10
 
 

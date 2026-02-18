@@ -1,14 +1,13 @@
 """Lead schemas for request/response validation."""
 
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from app.models.lead import LeadQuality, LeadStatus, LeadSource
+from app.models.lead import LeadQuality, LeadSource, LeadStatus
 from app.utils.logging import get_logger
-
 
 _ist_tz = ZoneInfo("Asia/Kolkata")
 _lead_schema_logger = get_logger("schemas.lead")

@@ -23,7 +23,11 @@ class Product(Base):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     model_number: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    type: Mapped[str] = mapped_column(String(50), nullable=False, default=ProductType.MONOCRYSTALLINE.value)
+    type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default=ProductType.MONOCRYSTALLINE.value,
+    )
 
     wattage: Mapped[int] = mapped_column(Integer, nullable=False)
     efficiency: Mapped[float] = mapped_column(Float, nullable=False)
@@ -55,4 +59,3 @@ class Product(Base):
 
     def __repr__(self) -> str:
         return f"<Product {self.name} ({self.model_number})>"
-

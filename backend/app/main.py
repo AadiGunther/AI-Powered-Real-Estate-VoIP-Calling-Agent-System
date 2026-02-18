@@ -7,28 +7,26 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+# Import routers
+from app.api.admin import router as admin_router
+from app.api.appointments import router as appointments_router
+from app.api.auth import router as auth_router
+from app.api.calls import router as calls_router
+from app.api.dashboard import router as dashboard_router
+from app.api.elevenlabs_calls import router as elevenlabs_calls_router
+from app.api.elevenlabs_conversation_init import router as elevenlabs_conversation_init_router
+from app.api.elevenlabs_webhook import router as elevenlabs_router
+from app.api.leads import router as leads_router
+from app.api.notifications import router as notifications_router
+from app.api.products import router as products_router
+from app.api.properties import router as properties_router
+from app.api.reports import router as reports_router
 from app.config import settings
 from app.database import lifespan_db
 from app.utils.logging import setup_logging
 
 # Setup logging
 setup_logging(debug=settings.debug)
-
-# Import routers
-from app.api.auth import router as auth_router
-from app.api.properties import router as properties_router
-from app.api.products import router as products_router
-from app.api.leads import router as leads_router
-from app.api.calls import router as calls_router
-from app.api.reports import router as reports_router
-from app.api.dashboard import router as dashboard_router
-from app.api.admin import router as admin_router
-from app.api.twilio_webhook import router as twilio_router
-from app.api.elevenlabs_webhook import router as elevenlabs_router
-from app.api.elevenlabs_conversation_init import router as elevenlabs_conversation_init_router
-from app.api.elevenlabs_calls import router as elevenlabs_calls_router
-from app.api.notifications import router as notifications_router
-from app.api.appointments import router as appointments_router
 
 
 @asynccontextmanager
@@ -77,7 +75,6 @@ app.include_router(reports_router, prefix="/reports", tags=["Reports"])
 app.include_router(dashboard_router)
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 app.include_router(appointments_router, prefix="/appointments", tags=["Appointments"])
-app.include_router(twilio_router, prefix="/twilio", tags=["Twilio"])
 app.include_router(elevenlabs_router, tags=["ElevenLabs"])
 app.include_router(elevenlabs_conversation_init_router)
 app.include_router(elevenlabs_calls_router, tags=["ElevenLabs Calls"])
@@ -97,8 +94,9 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Detailed health check."""
+    mongodb_status = "disabled" if not settings.mongodb_url else "configured"
     return {
         "status": "healthy",
         "database": "connected",
-        "mongodb": "connected",
+        "mongodb": mongodb_status,
     }

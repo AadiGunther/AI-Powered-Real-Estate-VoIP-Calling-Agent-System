@@ -2,7 +2,6 @@ from typing import Dict, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-
 active_notification_connections: Dict[int, Set[WebSocket]] = {}
 
 

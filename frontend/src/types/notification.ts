@@ -5,7 +5,8 @@ export type NotificationType =
     | 'product_created'
     | 'product_updated'
     | 'product_deleted'
-    | 'appointment_booked';
+    | 'appointment_booked'
+    | 'call_report_generated';
 
 export interface Notification {
     id: number;
@@ -14,6 +15,7 @@ export interface Notification {
     type: NotificationType;
     is_read: boolean;
     related_lead_id?: number | null;
+    related_call_id?: number | null;
     created_at: string;
 }
 

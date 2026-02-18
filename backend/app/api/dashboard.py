@@ -1,15 +1,15 @@
 """API endpoints for dashboard statistics and metrics."""
 
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select, func, and_, case
+from sqlalchemy import case, func, select
 
 from app.database import async_session_maker
-from app.models.call import Call, CallStatus, CallOutcome
+from app.models.call import Call, CallStatus
 from app.models.lead import Lead, LeadQuality, LeadStatus
 from app.models.product import Product
 from app.utils.logging import get_logger
@@ -39,6 +39,7 @@ class RecentCallResponse(BaseModel):
     id: int
     call_sid: str
     from_number: str
+    to_number: str
     status: str
     duration_seconds: Optional[int]
     handled_by_ai: bool
@@ -247,6 +248,7 @@ async def get_dashboard_charts():
 async def get_solar_realtime():
     try:
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        telemetry = None
 
         perf_data: Dict[str, Any] = {}
         env_data: Dict[str, Any] = {}
@@ -280,7 +282,8 @@ async def get_solar_realtime():
             trees_equivalent=float(fin_data.get("trees_equivalent", 5.0)),
         )
 
-        last_update_value = op_data.get("last_update") or telemetry.get("created_at") if telemetry else now
+        telemetry_created_at = telemetry.get("created_at") if telemetry else None
+        last_update_value = op_data.get("last_update") or telemetry_created_at or now
         if isinstance(last_update_value, str):
             last_update_dt = datetime.fromisoformat(last_update_value)
         else:
@@ -299,13 +302,7 @@ async def get_solar_realtime():
             last_update=last_update_dt,
         )
 
-        alerts_cursor = None
         alerts_docs: List[Dict[str, Any]] = []
-        try:
-            alerts_cursor = mongo.solar_alerts.find().sort("created_at", -1).limit(5)
-            alerts_docs = await alerts_cursor.to_list(length=5)
-        except Exception as e:
-            logger.error("get_solar_alerts_failed", error=str(e))
 
         alerts: List[SolarAlert] = []
         for doc in alerts_docs:
@@ -366,12 +363,10 @@ async def update_solar_telemetry(payload: SolarTelemetryUpdate):
     try:
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
 
-        overall_status = "ok"
         active_alarms = 0
         alerts: List[Dict[str, Any]] = []
 
         if payload.performance.system_efficiency_pct < 75.0:
-            overall_status = "warning"
             active_alarms += 1
             alerts.append(
                 {
@@ -381,8 +376,12 @@ async def update_solar_telemetry(payload: SolarTelemetryUpdate):
                 }
             )
 
-        if payload.environment.solar_irradiance_w_m2 > 800.0 and payload.performance.current_power_kw < payload.performance.total_capacity_kw * 0.5:
-            overall_status = "warning"
+        high_irradiance = payload.environment.solar_irradiance_w_m2 > 800.0
+        low_output = (
+            payload.performance.current_power_kw
+            < payload.performance.total_capacity_kw * 0.5
+        )
+        if high_irradiance and low_output:
             active_alarms += 1
             alerts.append(
                 {
@@ -437,7 +436,7 @@ async def get_dashboard_stats():
             # Products stats (solar inventory)
             total_products = await db.scalar(select(func.count(Product.id)))
             active_products = await db.scalar(
-                select(func.count(Product.id)).where(Product.is_active == True)
+                select(func.count(Product.id)).where(Product.is_active)
             )
             
             # Conversion rate (converted leads / total leads)
@@ -481,6 +480,7 @@ async def get_recent_calls(limit: int = Query(10, le=50)):
                     id=call.id,
                     call_sid=call.call_sid,
                     from_number=call.from_number,
+                    to_number=call.to_number,
                     status=call.status,
                     duration_seconds=call.duration_seconds,
                     handled_by_ai=call.handled_by_ai,
@@ -584,7 +584,10 @@ async def get_agent_performance():
                 call_stats = calls_result.one_or_none()
                 
                 total_calls = call_stats.total_calls if call_stats else 0
-                avg_duration = call_stats.avg_duration if call_stats and call_stats.avg_duration else 0
+                if call_stats and call_stats.avg_duration:
+                    avg_duration = call_stats.avg_duration
+                else:
+                    avg_duration = 0
                 
                 performance.append(
                     AgentPerformance(

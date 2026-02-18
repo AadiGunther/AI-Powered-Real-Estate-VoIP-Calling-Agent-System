@@ -1,13 +1,17 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Dict, Optional
 from urllib.parse import urlparse
 
-from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+from azure.storage.blob import (
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContentSettings,
+    generate_blob_sas,
+)
 
 from app.config import settings
 from app.utils.logging import get_logger
-
 
 logger = get_logger("services.blob_service")
 
@@ -21,6 +25,16 @@ class BlobService:
         if self.connection_string:
             try:
                 self.client = BlobServiceClient.from_connection_string(self.connection_string)
+            except Exception as e:
+                logger.error("blob_service_init_failed", error=str(e))
+        elif settings.azure_storage_account_name and settings.azure_storage_account_key:
+            try:
+                self.client = BlobServiceClient(
+                    account_url=(
+                        f"https://{settings.azure_storage_account_name}.blob.core.windows.net"
+                    ),
+                    credential=settings.azure_storage_account_key,
+                )
             except Exception as e:
                 logger.error("blob_service_init_failed", error=str(e))
 
@@ -54,7 +68,11 @@ class BlobService:
         while attempt < max_retries:
             attempt += 1
             try:
-                blob_client.upload_blob(file_data, overwrite=True)
+                blob_client.upload_blob(
+                    file_data,
+                    overwrite=True,
+                    content_settings=ContentSettings(content_type=content_type),
+                )
                 if metadata:
                     try:
                         blob_client.set_blob_metadata(metadata)
@@ -108,6 +126,11 @@ class BlobService:
 
     def _parse_account_credentials(self) -> Optional[Dict[str, str]]:
         if not self.connection_string:
+            if settings.azure_storage_account_name and settings.azure_storage_account_key:
+                return {
+                    "account_name": settings.azure_storage_account_name,
+                    "account_key": settings.azure_storage_account_key,
+                }
             logger.warning("blob_sas_missing_connection_string")
             return None
         parts: Dict[str, str] = {}
@@ -160,13 +183,75 @@ class BlobService:
         if not blob_url:
             logger.warning("blob_sas_missing_blob_url")
             return None
-        parsed = urlparse(blob_url)
+        cleaned = str(blob_url).strip().strip("`").strip().replace("`", "")
+        parsed = urlparse(cleaned)
         path = parsed.path.lstrip("/")
         if not path or "/" not in path:
             logger.error("blob_sas_invalid_blob_url", blob_url=blob_url)
             return None
+
         container_name, blob_name = path.split("/", 1)
+        if container_name == self.container_name:
+            return self.generate_sas_for_blob(container_name, blob_name, expiry_minutes=expiry_minutes)
+
+        if self.container_name:
+            if path.startswith("elevenlabs/"):
+                return self.generate_sas_for_blob(self.container_name, path, expiry_minutes=expiry_minutes)
+            if blob_name.startswith("elevenlabs/"):
+                return self.generate_sas_for_blob(
+                    self.container_name, blob_name, expiry_minutes=expiry_minutes
+                )
+
         return self.generate_sas_for_blob(container_name, blob_name, expiry_minutes=expiry_minutes)
+
+    def find_latest_blob_name(
+        self,
+        prefixes: list[str],
+        contains: str,
+        container_name: Optional[str] = None,
+    ) -> Optional[str]:
+        if not self.client:
+            logger.warning("blob_service_not_configured")
+            return None
+        target_container = (container_name or self.container_name or "").strip()
+        if not target_container:
+            logger.warning("blob_container_name_missing")
+            return None
+        if not contains:
+            return None
+
+        container_client = self.client.get_container_client(target_container)
+        try:
+            if not container_client.exists():
+                return None
+        except Exception:
+            return None
+
+        best_name: Optional[str] = None
+        best_modified = None
+        for prefix in prefixes:
+            if not prefix:
+                continue
+            try:
+                for blob in container_client.list_blobs(name_starts_with=prefix):
+                    name = getattr(blob, "name", None)
+                    if not isinstance(name, str) or not name:
+                        continue
+                    if contains not in name:
+                        continue
+                    if not name.lower().endswith(".mp3"):
+                        continue
+                    modified = getattr(blob, "last_modified", None)
+                    if best_name is None:
+                        best_name = name
+                        best_modified = modified
+                        continue
+                    if modified is not None and (best_modified is None or modified > best_modified):
+                        best_name = name
+                        best_modified = modified
+            except Exception:
+                continue
+        return best_name
 
     async def delete_older_than(self, days: int) -> int:
         if not self.client:

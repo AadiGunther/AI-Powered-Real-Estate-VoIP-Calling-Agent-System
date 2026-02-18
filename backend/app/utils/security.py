@@ -79,18 +79,27 @@ def decode_access_token(token: str) -> Optional[TokenPayload]:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    token: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Get the current authenticated user from JWT token."""
+    """Get the current authenticated user from JWT token (supports Header or Query Param)."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     
-    token = credentials.credentials
-    token_data = decode_access_token(token)
+    final_token = None
+    if credentials:
+        final_token = credentials.credentials
+    elif token:
+        final_token = token
+    
+    if not final_token:
+        raise credentials_exception
+        
+    token_data = decode_access_token(final_token)
     
     if token_data is None:
         raise credentials_exception

@@ -2,15 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import Request
-from pydantic import AliasChoices, Field
-
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.services.elevenlabs_conversation_init_service import build_dynamic_context
 from app.utils.logging import get_logger
-
 
 router = APIRouter(prefix="/elevenlabs", tags=["ElevenLabs"])
 logger = get_logger("api.elevenlabs_conversation_init")

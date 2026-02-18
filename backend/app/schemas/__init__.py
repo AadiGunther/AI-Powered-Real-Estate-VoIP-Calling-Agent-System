@@ -1,52 +1,52 @@
 """Schemas package initialization."""
 
 from app.schemas.auth import (
+    LoginRequest,
+    PasswordChangeRequest,
+    RegisterRequest,
     Token,
     TokenPayload,
     TokenRefresh,
-    LoginRequest,
-    RegisterRequest,
-    PasswordChangeRequest,
-)
-from app.schemas.user import (
-    UserCreate,
-    UserUpdate,
-    UserResponse,
-    UserListResponse,
-    UserRoleUpdate,
-)
-from app.schemas.property import (
-    PropertyCreate,
-    PropertyUpdate,
-    PropertyResponse,
-    PropertyListResponse,
-    PropertySearchParams,
-)
-from app.schemas.product import (
-    ProductCreate,
-    ProductUpdate,
-    ProductResponse,
-    ProductListResponse,
-)
-from app.schemas.lead import (
-    LeadCreate,
-    LeadUpdate,
-    LeadResponse,
-    LeadListResponse,
-    LeadSearchParams,
-    LeadQualityUpdate,
-    LeadStatusUpdate,
-    LeadAssign,
 )
 from app.schemas.call import (
     CallCreate,
-    CallUpdate,
-    CallResponse,
     CallListResponse,
-    CallSearchParams,
-    CallOutcomeUpdate,
     CallNotesUpdate,
+    CallOutcomeUpdate,
+    CallResponse,
+    CallSearchParams,
     CallTranscript,
+    CallUpdate,
+)
+from app.schemas.lead import (
+    LeadAssign,
+    LeadCreate,
+    LeadListResponse,
+    LeadQualityUpdate,
+    LeadResponse,
+    LeadSearchParams,
+    LeadStatusUpdate,
+    LeadUpdate,
+)
+from app.schemas.product import (
+    ProductCreate,
+    ProductListResponse,
+    ProductResponse,
+    ProductUpdate,
+)
+from app.schemas.property import (
+    PropertyCreate,
+    PropertyListResponse,
+    PropertyResponse,
+    PropertySearchParams,
+    PropertyUpdate,
+)
+from app.schemas.user import (
+    UserCreate,
+    UserListResponse,
+    UserResponse,
+    UserRoleUpdate,
+    UserUpdate,
 )
 
 __all__ = [

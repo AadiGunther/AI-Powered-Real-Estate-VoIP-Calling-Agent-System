@@ -3,8 +3,8 @@
 from functools import lru_cache
 from typing import List
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -17,14 +17,14 @@ class Settings(BaseSettings):
 
     # ---------------- DATABASE ----------------
     database_url: str
-    mongodb_url: str
-    mongodb_db: str
+    mongodb_url: str = ""
+    mongodb_db: str = ""
 
     # ---------------- TWILIO ----------------
-    twilio_account_sid: str
-    twilio_auth_token: str
-    twilio_phone_number: str
-    twilio_application_sid: str
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
+    twilio_application_sid: str = ""
 
     # ---------------- OPENAI (fallback / reports) ----------------
     openai_api_key: str = ""  # Optional fallback
@@ -50,6 +50,8 @@ class Settings(BaseSettings):
 
     azure_storage_connection_string: str = ""
     azure_storage_container_name: str = "call-recordings"
+    azure_storage_account_name: str = ""
+    azure_storage_account_key: str = ""
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
     elevenlabs_base_url: str = "https://api.elevenlabs.io"

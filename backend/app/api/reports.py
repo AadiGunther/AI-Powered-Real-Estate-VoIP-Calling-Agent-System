@@ -1,18 +1,18 @@
 """Reports API endpoints."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, and_
+from fastapi import APIRouter, Depends
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.user import User, UserRole
-from app.models.call import Call, CallStatus, CallOutcome
-from app.models.lead import Lead, LeadStatus, LeadQuality
+from app.models.call import Call, CallOutcome, CallStatus
+from app.models.lead import Lead, LeadQuality, LeadStatus
 from app.models.product import Product
+from app.models.user import User, UserRole
 from app.utils.security import get_current_user, require_manager
 
 router = APIRouter()
@@ -28,7 +28,6 @@ async def get_dashboard_summary(
         hour=0, minute=0, second=0, microsecond=0
     )
     week_ago = today - timedelta(days=7)
-    month_ago = today - timedelta(days=30)
     
     # Total calls today
     calls_today = await db.execute(
@@ -48,7 +47,7 @@ async def get_dashboard_summary(
     
     # Active products
     active_products = await db.execute(
-        select(func.count(Product.id)).where(Product.is_active == True)
+        select(func.count(Product.id)).where(Product.is_active.is_(True))
     )
     
     # Conversion rate (leads converted / total leads)
@@ -62,7 +61,7 @@ async def get_dashboard_summary(
     
     # Average call duration
     avg_duration = await db.execute(
-        select(func.avg(Call.duration_seconds)).where(Call.duration_seconds != None)
+        select(func.avg(Call.duration_seconds)).where(Call.duration_seconds.is_not(None))
     )
     
     return {
@@ -120,20 +119,24 @@ async def get_call_analytics(
     # AI vs Human handled
     ai_handled = await db.execute(
         select(func.count(Call.id)).where(
-            and_(date_filter, Call.handled_by_ai == True, Call.escalated_to_human == False)
+            and_(
+                date_filter,
+                Call.handled_by_ai.is_(True),
+                Call.escalated_to_human.is_(False),
+            )
         )
     )
     
     escalated = await db.execute(
         select(func.count(Call.id)).where(
-            and_(date_filter, Call.escalated_to_human == True)
+            and_(date_filter, Call.escalated_to_human.is_(True))
         )
     )
     
     # Average duration
     avg_duration = await db.execute(
         select(func.avg(Call.duration_seconds)).where(
-            and_(date_filter, Call.duration_seconds != None)
+            and_(date_filter, Call.duration_seconds.is_not(None))
         )
     )
     
@@ -224,7 +227,10 @@ async def get_agent_performance(
             "agent_name": agent.full_name,
             "assigned_leads": assigned_count,
             "converted_leads": converted_count,
-            "conversion_rate": round((converted_count / assigned_count * 100) if assigned_count > 0 else 0, 2),
+            "conversion_rate": round(
+                (converted_count / assigned_count * 100) if assigned_count > 0 else 0,
+                2,
+            ),
             "escalated_calls": escalated_calls.scalar() or 0,
         })
     
@@ -275,7 +281,7 @@ async def get_lead_analytics(
     # Unassigned leads
     unassigned = await db.execute(
         select(func.count(Lead.id)).where(
-            and_(date_filter, Lead.assigned_agent_id == None)
+            and_(date_filter, Lead.assigned_agent_id.is_(None))
         )
     )
     
@@ -283,7 +289,7 @@ async def get_lead_analytics(
     converted_leads = await db.execute(
         select(Lead).where(
             and_(
-                Lead.converted_at != None,
+                Lead.converted_at.is_not(None),
                 Lead.created_at >= date_from,
             )
         )

@@ -1,11 +1,11 @@
 """Property schemas for request/response validation."""
 
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.property import PropertyType, PropertyStatus
+from app.models.property import PropertyStatus, PropertyType
 
 
 class PropertyBase(BaseModel):

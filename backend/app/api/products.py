@@ -3,21 +3,21 @@
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.models.audit_log import AuditAction, AuditLog
+from app.models.notification import NotificationType
 from app.models.product import Product, ProductType
 from app.models.user import User
-from app.models.audit_log import AuditLog, AuditAction
-from app.models.notification import NotificationType
 from app.schemas.product import (
     ProductCreate,
-    ProductUpdate,
-    ProductResponse,
     ProductListResponse,
+    ProductResponse,
+    ProductUpdate,
 )
 from app.services.notification_service import NotificationService
 from app.utils.security import get_current_user, require_admin
@@ -63,7 +63,7 @@ async def list_products(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ProductListResponse:
-    query = select(Product).where(Product.is_active == True)
+    query = select(Product).where(Product.is_active.is_(True))
 
     if type is not None:
         query = query.where(Product.type == type.value)
@@ -147,7 +147,9 @@ async def get_product(
     product_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> ProductResponse:
-    result = await db.execute(select(Product).where(Product.id == product_id, Product.is_active == True))
+    result = await db.execute(
+        select(Product).where(Product.id == product_id, Product.is_active.is_(True))
+    )
     product = result.scalar_one_or_none()
 
     if not product:

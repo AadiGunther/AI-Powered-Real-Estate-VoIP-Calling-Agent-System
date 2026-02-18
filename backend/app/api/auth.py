@@ -1,6 +1,6 @@
 """Authentication API endpoints."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.auth import LoginRequest, RegisterRequest, Token, PasswordChangeRequest
+from app.schemas.auth import LoginRequest, PasswordChangeRequest, RegisterRequest, Token
 from app.schemas.user import UserResponse
 from app.utils.security import (
     create_access_token,

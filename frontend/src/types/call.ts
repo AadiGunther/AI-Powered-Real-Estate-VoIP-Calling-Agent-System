@@ -28,6 +28,7 @@ export interface Call {
     lead_created?: boolean;
     sentiment_score?: number;
     customer_satisfaction?: number;
+    structured_report?: string;
 }
 
 export interface CallListResponse {

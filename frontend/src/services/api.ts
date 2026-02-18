@@ -40,7 +40,8 @@ api.interceptors.response.use(
             status: error.response?.status,
             detail: error.response?.data?.detail,
         });
-        if (error.response?.status === 401) {
+        const skipAuthRedirect = Boolean((error.config as any)?.skipAuthRedirect);
+        if (error.response?.status === 401 && !skipAuthRedirect) {
             localStorage.removeItem('token');
             window.location.href = '/login';
         }

@@ -7,7 +7,6 @@ from pydantic import BaseModel, field_validator
 from app.models.notification import NotificationType
 from app.utils.logging import get_logger
 
-
 _ist_tz = ZoneInfo("Asia/Kolkata")
 _notification_schema_logger = get_logger("schemas.notification")
 

@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -27,8 +27,11 @@ class Appointment(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
     # Associations
-    call_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    lead_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    call_id: Mapped[int] = mapped_column(ForeignKey("calls.id"), nullable=False, index=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"), nullable=False, index=True)
+
+    call = relationship("Call")
+    lead = relationship("Lead")
 
     # Appointment Details
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

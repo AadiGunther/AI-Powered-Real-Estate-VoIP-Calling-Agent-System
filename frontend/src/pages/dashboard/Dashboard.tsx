@@ -22,6 +22,7 @@ interface RecentCall {
     id: number;
     call_sid: string;
     from_number: string;
+    to_number: string;
     status: string;
     duration_seconds: number;
     handled_by_ai: boolean;
@@ -240,7 +241,7 @@ export const Dashboard: React.FC = () => {
                                         <Phone size={16} />
                                     </div>
                                     <div className="recent-info">
-                                        <span className="recent-title">{call.from_number}</span>
+                                        <span className="recent-title">{call.from_number} → {call.to_number}</span>
                                         <span className="recent-subtitle">
                                             {call.transcript_summary ? call.transcript_summary.substring(0, 40) + '...' : 'No summary'}
                                             • {isOngoing(call.status) ? 'Ongoing' : formatDuration(call.duration_seconds || 0)}

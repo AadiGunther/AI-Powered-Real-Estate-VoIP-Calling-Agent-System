@@ -1,21 +1,20 @@
 """Admin API endpoints for user management."""
 
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.schemas.user import (
     UserCreate,
-    UserUpdate,
-    UserResponse,
     UserListResponse,
-    UserRoleUpdate,
     UserManagerAssign,
+    UserResponse,
+    UserRoleUpdate,
+    UserUpdate,
 )
 from app.utils.security import get_password_hash, require_admin
 
@@ -25,7 +24,7 @@ router = APIRouter()
 @router.get("/users", response_model=UserListResponse)
 async def list_users(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=200),
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
     search: Optional[str] = None,

@@ -4,20 +4,19 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.property import Property
 from app.models.user import User
-from app.models.property import Property, PropertyStatus
 from app.schemas.property import (
     PropertyCreate,
-    PropertyUpdate,
-    PropertyResponse,
     PropertyListResponse,
-    PropertySearchParams,
+    PropertyResponse,
+    PropertyUpdate,
 )
-from app.utils.security import get_current_user, require_manager
+from app.utils.security import require_manager
 
 router = APIRouter()
 
@@ -77,8 +76,8 @@ async def list_properties(
 ) -> PropertyListResponse:
     """List properties with optional filters."""
     # Build query
-    query = select(Property).where(Property.is_active == True)
-    
+    query = select(Property).where(Property.is_active.is_(True))
+
     # Apply filters
     if city:
         query = query.where(Property.city.ilike(f"%{city}%"))
@@ -172,7 +171,7 @@ async def search_properties(
     
     query = select(Property).where(
         and_(
-            Property.is_active == True,
+            Property.is_active.is_(True),
             or_(
                 Property.title.ilike(search_term),
                 Property.city.ilike(search_term),

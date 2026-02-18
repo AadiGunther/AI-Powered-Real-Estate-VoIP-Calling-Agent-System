@@ -1,35 +1,34 @@
 """Leads API endpoints."""
 
-from datetime import datetime, timezone, timedelta
 import json
-from typing import Optional, Dict, Any, List
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_, or_
-from sqlalchemy.ext.asyncio import AsyncSession
-
 import anyio
-from openai import OpenAI, AzureOpenAI
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from openai import AzureOpenAI, OpenAI
+from sqlalchemy import and_, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.user import User, UserRole
-from app.models.lead import Lead, LeadQuality, LeadStatus
-from app.models.call import Call
 from app.models.appointment import Appointment
+from app.models.audit_log import AuditAction, AuditLog
+from app.models.call import Call
+from app.models.lead import Lead, LeadQuality, LeadStatus
 from app.models.notification import NotificationType
-from app.models.audit_log import AuditLog, AuditAction
+from app.models.user import User, UserRole
 from app.schemas.lead import (
-    LeadCreate,
-    LeadUpdate,
-    LeadResponse,
-    LeadListResponse,
-    LeadQualityUpdate,
-    LeadStatusUpdate,
+    LeadAiSummaryResponse,
     LeadAssign,
     LeadBulkAssign,
-    LeadAiSummaryResponse,
+    LeadCreate,
+    LeadListResponse,
+    LeadQualityUpdate,
+    LeadResponse,
+    LeadStatusUpdate,
+    LeadUpdate,
 )
 from app.services.notification_service import NotificationService
 from app.utils.security import get_current_user, require_manager
@@ -70,7 +69,7 @@ async def list_leads(
     if assigned_agent_id is not None:
         query = query.where(Lead.assigned_agent_id == assigned_agent_id)
     if unassigned:
-        query = query.where(Lead.assigned_agent_id == None)
+        query = query.where(Lead.assigned_agent_id.is_(None))
     if phone:
         query = query.where(Lead.phone.contains(phone))
     
@@ -366,6 +365,8 @@ async def assign_lead(
     )
     db.add(audit)
 
+    await db.flush()
+
     return lead
 
 
@@ -468,7 +469,11 @@ def _clamp_int(value: float, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, int(round(value))))
 
 
-def _build_heuristic_ai_summary(lead: Lead, calls: List[Call], has_future_appointment: bool) -> LeadAiSummaryResponse:
+def _build_heuristic_ai_summary(
+    lead: Lead,
+    calls: List[Call],
+    has_future_appointment: bool,
+) -> LeadAiSummaryResponse:
     base_score_map = {
         LeadQuality.COLD.value: 30,
         LeadQuality.WARM.value: 60,
@@ -496,8 +501,12 @@ def _build_heuristic_ai_summary(lead: Lead, calls: List[Call], has_future_appoin
             score -= 6
 
     recent_calls = calls[:5]
-    sentiment_values = [c.sentiment_score for c in recent_calls if c.sentiment_score is not None]
-    satisfaction_values = [c.customer_satisfaction for c in recent_calls if c.customer_satisfaction is not None]
+    sentiment_values = [
+        c.sentiment_score for c in recent_calls if c.sentiment_score is not None
+    ]
+    satisfaction_values = [
+        c.customer_satisfaction for c in recent_calls if c.customer_satisfaction is not None
+    ]
     if sentiment_values:
         score += float(sum(sentiment_values) / len(sentiment_values)) * 10.0
     if satisfaction_values:
@@ -507,18 +516,27 @@ def _build_heuristic_ai_summary(lead: Lead, calls: List[Call], has_future_appoin
         score += 10
 
     lead_quality_score = _clamp_int(score, 0, 100)
-    likelihood_to_convert = _clamp_int(lead_quality_score * 0.95 + (5 if has_future_appointment else 0), 0, 100)
+    likelihood_to_convert = _clamp_int(
+        lead_quality_score * 0.95 + (5 if has_future_appointment else 0),
+        0,
+        100,
+    )
 
     engagement_level = "low"
     if len(recent_calls) >= 2 or lead.follow_up_count >= 2:
         engagement_level = "medium"
-    if lead_quality_score >= 70 or (sentiment_values and sum(sentiment_values) / len(sentiment_values) > 0.25):
+    if lead_quality_score >= 70 or (
+        sentiment_values and sum(sentiment_values) / len(sentiment_values) > 0.25
+    ):
         engagement_level = "high"
 
     recommended_next_actions: List[str] = []
     if lead.status in {LeadStatus.NEW.value, LeadStatus.CONTACTED.value}:
         recommended_next_actions.append("Call within 24 hours and confirm needs.")
-    if lead.status in {LeadStatus.QUALIFIED.value, LeadStatus.NEGOTIATING.value} and not has_future_appointment:
+    if (
+        lead.status in {LeadStatus.QUALIFIED.value, LeadStatus.NEGOTIATING.value}
+        and not has_future_appointment
+    ):
         recommended_next_actions.append("Propose a site visit and share 2–3 matching options.")
     if has_future_appointment:
         recommended_next_actions.append("Confirm appointment details and send location/address.")
@@ -586,7 +604,11 @@ def _try_build_openai_client() -> Optional[tuple[Any, str]]:
     return None
 
 
-async def _generate_ai_summary_via_llm(lead: Lead, calls: List[Call], has_future_appointment: bool) -> Optional[LeadAiSummaryResponse]:
+async def _generate_ai_summary_via_llm(
+    lead: Lead,
+    calls: List[Call],
+    has_future_appointment: bool,
+) -> Optional[LeadAiSummaryResponse]:
     client_and_model = _try_build_openai_client()
     if not client_and_model:
         return None
@@ -629,7 +651,9 @@ async def _generate_ai_summary_via_llm(lead: Lead, calls: List[Call], has_future
                 "budget_min": lead.budget_min,
                 "budget_max": lead.budget_max,
                 "follow_up_count": lead.follow_up_count,
-                "last_contacted_at": lead.last_contacted_at.isoformat() if lead.last_contacted_at else None,
+                "last_contacted_at": (
+                    lead.last_contacted_at.isoformat() if lead.last_contacted_at else None
+                ),
                 "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
             },
             "recent_calls": call_payload,
@@ -663,7 +687,9 @@ async def _generate_ai_summary_via_llm(lead: Lead, calls: List[Call], has_future
             lead_quality_score=_clamp_int(parsed.get("lead_quality_score", 50), 0, 100),
             engagement_level=str(parsed.get("engagement_level", "medium")),
             likelihood_to_convert=_clamp_int(parsed.get("likelihood_to_convert", 50), 0, 100),
-            recommended_next_actions=[str(x) for x in (parsed.get("recommended_next_actions") or [])],
+            recommended_next_actions=[
+                str(x) for x in (parsed.get("recommended_next_actions") or [])
+            ],
             key_conversation_points=[str(x) for x in (parsed.get("key_conversation_points") or [])],
             patterns=[str(x) for x in (parsed.get("patterns") or [])],
             generated_at=datetime.now(ZoneInfo("Asia/Kolkata")),
@@ -689,7 +715,10 @@ async def get_lead_ai_summary(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
     if current_user.role == UserRole.AGENT.value and lead.assigned_agent_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this lead")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this lead",
+        )
 
     calls_result = await db.execute(
         select(Call)

@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_, or_, asc, desc
+from sqlalchemy import and_, asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -11,9 +11,9 @@ from app.models.lead import Lead
 from app.models.user import User, UserRole
 from app.schemas.appointment import (
     AppointmentListResponse,
+    AppointmentRescheduleRequest,
     AppointmentResponse,
     AppointmentUpdate,
-    AppointmentRescheduleRequest,
 )
 from app.utils.security import get_current_user
 
@@ -188,7 +188,10 @@ async def update_appointment(
 
     if assigned_staff_id is not None:
         if current_user.role not in {UserRole.ADMIN.value, UserRole.MANAGER.value}:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers can reassign staff.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only managers can reassign staff.",
+            )
         lead.assigned_agent_id = assigned_staff_id
 
     await db.flush()
@@ -217,8 +220,13 @@ async def cancel_appointment(
 
     lead_result = await db.execute(select(Lead).where(Lead.id == appointment.lead_id))
     lead = lead_result.scalar_one_or_none()
-    if current_user.role == UserRole.AGENT.value and (not lead or lead.assigned_agent_id != current_user.id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this appointment")
+    if current_user.role == UserRole.AGENT.value and (
+        not lead or lead.assigned_agent_id != current_user.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this appointment",
+        )
 
     appointment.status = "cancelled"
     await db.flush()
@@ -265,4 +273,3 @@ async def reschedule_appointment(
         staff = staff_result.scalar_one_or_none()
 
     return _appointment_to_response(appointment, lead, staff)
-

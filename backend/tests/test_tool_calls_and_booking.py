@@ -1,30 +1,29 @@
+import time
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timezone, timedelta
-
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import async_session_maker
-from app.config import settings
-from app.models.call import Call, CallDirection, CallStatus
-from app.models.lead import Lead, LeadSource, LeadQuality, LeadStatus
-from app.models.appointment import Appointment
-from app.models.enquiry import Enquiry, EnquiryType
 from app.api.calls import (
-    tool_book_appointment,
     ToolBookAppointmentRequest,
-    tool_start_call,
-    ToolStartCallRequest,
+    tool_book_appointment,
 )
+from app.config import settings
+from app.database import async_session_maker
+from app.models.appointment import Appointment
+from app.models.call import Call, CallDirection, CallStatus
+from app.models.enquiry import Enquiry, EnquiryType
+from app.models.lead import Lead, LeadQuality, LeadSource, LeadStatus
 
 
 @pytest.mark.asyncio
 async def test_tool_book_appointment_creates_records_and_returns_success():
     async with async_session_maker() as db:  # type: AsyncSession
+        ts = int(time.time() * 1000)
         lead = Lead(
             name="Test Lead",
-            phone="+15550000000",
-            email="lead@example.com",
+            phone=f"+1555{ts % 10000000000:010d}",
+            email=f"lead_{ts}@example.com",
             source=LeadSource.OUTBOUND_CALL.value,
             quality=LeadQuality.COLD.value,
             status=LeadStatus.NEW.value,
@@ -33,7 +32,7 @@ async def test_tool_book_appointment_creates_records_and_returns_success():
         await db.flush()
 
         call = Call(
-            call_sid="TEST_BOOK_APPOINTMENT_CALL",
+            call_sid=f"TEST_BOOK_APPOINTMENT_CALL_{ts}",
             from_number=settings.twilio_phone_number,
             to_number=lead.phone,
             direction=CallDirection.OUTBOUND.value,
@@ -59,6 +58,7 @@ async def test_tool_book_appointment_creates_records_and_returns_success():
         response = await tool_book_appointment(payload=payload, db=db, api_key="test-key")
 
         assert response.success is True
+        assert response.lead_id == lead.id
         assert response.enquiry_id is not None
 
         result_appt = await db.execute(
@@ -69,7 +69,10 @@ async def test_tool_book_appointment_creates_records_and_returns_success():
         )
         appointment = result_appt.scalar_one()
 
-        assert appointment.scheduled_for == scheduled_for
+        appt_dt = appointment.scheduled_for
+        if appt_dt.tzinfo is None:
+            appt_dt = appt_dt.replace(tzinfo=timezone.utc)
+        assert appt_dt == scheduled_for
         assert appointment.address == "123 Test Street"
 
         result_enquiry = await db.execute(
@@ -88,10 +91,11 @@ async def test_tool_book_appointment_creates_records_and_returns_success():
 @pytest.mark.asyncio
 async def test_tool_book_appointment_creates_call_when_external_id_provided():
     async with async_session_maker() as db:  # type: AsyncSession
+        ts = int(time.time() * 1000)
         lead = Lead(
             name="Test Lead",
-            phone="+15551112222",
-            email="lead2@example.com",
+            phone=f"+1555{(ts + 1) % 10000000000:010d}",
+            email=f"lead2_{ts}@example.com",
             source=LeadSource.OUTBOUND_CALL.value,
             quality=LeadQuality.COLD.value,
             status=LeadStatus.NEW.value,
@@ -99,7 +103,7 @@ async def test_tool_book_appointment_creates_call_when_external_id_provided():
         db.add(lead)
         await db.flush()
 
-        external_call_id = "TEST_BOOK_APPOINTMENT_CREATE_CALL"
+        external_call_id = f"TEST_BOOK_APPOINTMENT_CREATE_CALL_{ts}"
         scheduled_for = datetime.now(timezone.utc) + timedelta(days=2)
 
         payload = ToolBookAppointmentRequest(
@@ -114,6 +118,7 @@ async def test_tool_book_appointment_creates_call_when_external_id_provided():
         response = await tool_book_appointment(payload=payload, db=db, api_key="test-key")
 
         assert response.success is True
+        assert response.lead_id == lead.id
         assert response.enquiry_id is not None
 
         result_call = await db.execute(select(Call).where(Call.call_sid == external_call_id))
@@ -126,6 +131,11 @@ async def test_tool_book_appointment_creates_call_when_external_id_provided():
             )
         )
         appointment = result_appt.scalar_one()
+        appt_dt = appointment.scheduled_for
+        if appt_dt.tzinfo is None:
+            appt_dt = appt_dt.replace(tzinfo=timezone.utc)
+        assert appt_dt == scheduled_for
+        assert appointment.address == "456 Another Street"
 
         result_enquiry = await db.execute(
             select(Enquiry).where(

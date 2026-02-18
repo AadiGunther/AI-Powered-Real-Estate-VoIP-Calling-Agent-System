@@ -13,6 +13,7 @@ import { CallHistory } from './pages/calls/CallHistory';
 import { Reports } from './pages/reports/Reports';
 import { UserManagement } from './pages/admin/UserManagement';
 import { Appointments } from './pages/appointments/Appointments';
+import { SolarReportPage } from './pages/calls/SolarReportPage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { isAuthenticated, setUser } = useAuthStore();
@@ -45,6 +46,7 @@ const App: React.FC = () => {
             <Route path="/calls" element={<ProtectedRoute><CallHistory /></ProtectedRoute>} />
             <Route path="/calls/received" element={<ProtectedRoute><CallHistory receptionFilter="received" /></ProtectedRoute>} />
             <Route path="/calls/failed" element={<ProtectedRoute><CallHistory receptionFilter="not_received" /></ProtectedRoute>} />
+            <Route path="/calls/:callId/report" element={<ProtectedRoute><SolarReportPage /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
             <Route path="/admin/products" element={<ProtectedRoute><ProductAdmin /></ProtectedRoute>} />

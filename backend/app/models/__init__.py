@@ -1,14 +1,14 @@
 """Models package initialization."""
 
-from app.models.user import User, UserRole
-from app.models.property import Property, PropertyType, PropertyStatus
-from app.models.lead import Lead, LeadQuality, LeadStatus, LeadSource
-from app.models.call import Call, CallDirection, CallStatus, CallOutcome
-from app.models.enquiry import Enquiry, EnquiryType
 from app.models.appointment import Appointment, AppointmentStatus
-from app.models.notification import Notification, NotificationType, NotificationPreference
-from app.models.audit_log import AuditLog, AuditAction
+from app.models.audit_log import AuditAction, AuditLog
+from app.models.call import Call, CallDirection, CallOutcome, CallStatus
 from app.models.elevenlabs_event_log import ElevenLabsEventLog
+from app.models.enquiry import Enquiry, EnquiryType
+from app.models.lead import Lead, LeadQuality, LeadSource, LeadStatus
+from app.models.notification import Notification, NotificationPreference, NotificationType
+from app.models.property import Property, PropertyStatus, PropertyType
+from app.models.user import User, UserRole
 
 __all__ = [
     # User

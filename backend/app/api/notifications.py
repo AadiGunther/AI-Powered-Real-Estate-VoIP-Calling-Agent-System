@@ -2,10 +2,10 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import and_, select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db, async_session_maker
+from app.database import async_session_maker, get_db
 from app.models.notification import Notification, NotificationPreference, NotificationType
 from app.models.user import User
 from app.schemas.notification import (
@@ -20,7 +20,6 @@ from app.schemas.notification import (
 from app.services.notification_realtime import register_connection, unregister_connection
 from app.utils.logging import get_logger
 from app.utils.security import decode_access_token, get_current_user
-
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 logger = get_logger("api.notifications")
@@ -170,7 +169,7 @@ async def get_unread_count(
         select(Notification)
         .where(
             Notification.user_id == current_user.id,
-            Notification.is_read == False,
+            Notification.is_read.is_(False),
         )
         .with_only_columns(Notification.id)
     )

@@ -1,6 +1,8 @@
 from sqlalchemy import select
+
 from app.database import async_session_maker
 from app.models.property import Property, PropertyStatus
+
 
 class RAGService:
     async def get_available_locations(self) -> str:

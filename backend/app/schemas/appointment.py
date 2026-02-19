@@ -10,6 +10,7 @@ class AppointmentResponse(BaseModel):
     lead_id: int
     scheduled_for: datetime
     address: str
+    contact_number: Optional[str] = None
     notes: Optional[str] = None
     status: str
 
@@ -38,6 +39,7 @@ class AppointmentListResponse(BaseModel):
 class AppointmentUpdate(BaseModel):
     scheduled_for: Optional[datetime] = None
     address: Optional[str] = Field(None, min_length=2, max_length=255)
+    contact_number: Optional[str] = Field(None, min_length=5, max_length=50)
     notes: Optional[str] = None
     status: Optional[str] = None
     assigned_staff_id: Optional[int] = None
@@ -45,4 +47,3 @@ class AppointmentUpdate(BaseModel):
 
 class AppointmentRescheduleRequest(BaseModel):
     scheduled_for: datetime
-

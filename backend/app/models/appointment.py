@@ -36,6 +36,7 @@ class Appointment(Base):
     # Appointment Details
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     address: Mapped[str] = mapped_column(String(255), nullable=False)
+    contact_number: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Status

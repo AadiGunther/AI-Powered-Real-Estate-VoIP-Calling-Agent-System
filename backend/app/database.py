@@ -145,10 +145,52 @@ def _migrate_notifications_table(connection) -> None:
         return
 
 
+def _migrate_appointments_table(connection) -> None:
+    inspector = sa_inspect(connection)
+    try:
+        columns = {col["name"] for col in inspector.get_columns("appointments")}
+    except Exception:
+        return
+
+    dialect = connection.dialect.name
+
+    def _add_column_sqlite(name: str, column_def: str) -> None:
+        connection.execute(text(f"ALTER TABLE appointments ADD COLUMN {name} {column_def}"))
+
+    def _add_column_postgres(name: str, column_def: str) -> None:
+        connection.execute(
+            text(f"ALTER TABLE appointments ADD COLUMN IF NOT EXISTS {name} {column_def}")
+        )
+
+    def _add_column_generic(name: str, column_def: str) -> None:
+        connection.execute(text(f"ALTER TABLE appointments ADD COLUMN {name} {column_def}"))
+
+    def _add_column(
+        name: str,
+        sqlite_def: str,
+        pg_def: str | None = None,
+        generic_def: str | None = None,
+    ) -> None:
+        if name in columns:
+            return
+        if dialect == "sqlite":
+            _add_column_sqlite(name, sqlite_def)
+        elif dialect == "postgresql":
+            _add_column_postgres(name, pg_def or sqlite_def)
+        else:
+            _add_column_generic(name, generic_def or sqlite_def)
+
+    try:
+        _add_column("contact_number", "VARCHAR(30)", "VARCHAR(30)", "VARCHAR(30)")
+    except Exception:
+        return
+
+
 def _init_and_migrate(connection) -> None:
     Base.metadata.create_all(connection)
     _migrate_calls_table(connection)
     _migrate_notifications_table(connection)
+    _migrate_appointments_table(connection)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

@@ -313,9 +313,9 @@ export const Appointments: React.FC = () => {
                                 <th>Date</th>
                                 <th>Time</th>
                                 <th>Client</th>
+                                <th>Address</th>
                                 <th>Service</th>
                                 <th>Status</th>
-                                <th>Duration</th>
                                 <th>Staff</th>
                                 <th>Contact</th>
                                 <th>Notes</th>
@@ -328,13 +328,21 @@ export const Appointments: React.FC = () => {
                                     <td>{new Date(appt.scheduled_for).toLocaleDateString()}</td>
                                     <td>{new Date(appt.scheduled_for).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
                                     <td>{appt.client_name || `Lead #${appt.lead_id}`}</td>
+                                    <td>
+                                        <div className="lead-summary" title={appt.address || ''}>
+                                            {appt.address
+                                                ? appt.address.length > 40
+                                                    ? `${appt.address.substring(0, 40)}...`
+                                                    : appt.address
+                                                : <span className="text-muted">-</span>}
+                                        </div>
+                                    </td>
                                     <td>{appt.service_type || 'Site Visit'}</td>
                                     <td>
                                         <span className={`badge ${statusBadgeClass(appt.status)}`}>
                                             {String(appt.status).replace('_', ' ')}
                                         </span>
                                     </td>
-                                    <td>{appt.duration_minutes || 60} min</td>
                                     <td>{appt.assigned_staff_name || (appt.assigned_staff_id ? `Staff #${appt.assigned_staff_id}` : '-')}</td>
                                     <td>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>

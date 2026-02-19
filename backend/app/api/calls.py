@@ -751,6 +751,7 @@ class ToolBookAppointmentRequest(BaseModel):
     lead_id: int
     scheduled_for: datetime
     address: str
+    contact_number: Optional[str] = None
     notes: Optional[str] = None
     call_id: Optional[int] = None
     external_call_id: Optional[str] = None
@@ -958,6 +959,7 @@ async def tool_book_appointment(
         external_call_id=payload.external_call_id,
         scheduled_for=payload.scheduled_for.isoformat(),
         address=payload.address,
+        contact_number=payload.contact_number,
     )
     try:
         result = await db.execute(select(Lead).where(Lead.id == payload.lead_id))
@@ -973,6 +975,8 @@ async def tool_book_appointment(
                 enquiry_id=None,
                 message="Lead not found for appointment booking.",
             )
+        contact_number = payload.contact_number or lead.phone
+
         call = None
         if payload.external_call_id:
             result_call = await db.execute(
@@ -1021,6 +1025,7 @@ async def tool_book_appointment(
                 lead_id=lead.id,
                 scheduled_for=payload.scheduled_for,
                 address=payload.address,
+                contact_number=contact_number,
                 notes=payload.notes,
                 status=AppointmentStatus.SCHEDULED.value,
             )
@@ -1028,6 +1033,7 @@ async def tool_book_appointment(
         else:
             appointment.scheduled_for = payload.scheduled_for
             appointment.address = payload.address
+            appointment.contact_number = contact_number
             appointment.notes = payload.notes
             if appointment.status in {
                 AppointmentStatus.CANCELLED.value,

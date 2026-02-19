@@ -37,6 +37,7 @@ def _appointment_to_response(
         lead_id=appointment.lead_id,
         scheduled_for=appointment.scheduled_for,
         address=appointment.address,
+        contact_number=appointment.contact_number or contact_phone,
         notes=appointment.notes,
         status=appointment.status,
         client_name=client_name,
@@ -91,6 +92,7 @@ async def list_appointments(
                 Lead.email.ilike(s),
                 Appointment.address.ilike(s),
                 Appointment.notes.ilike(s),
+                Appointment.contact_number.ilike(s),
             )
         )
     if filters:

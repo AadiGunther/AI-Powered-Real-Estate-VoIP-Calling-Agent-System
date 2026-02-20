@@ -491,6 +491,67 @@ async def get_call_recording(
     }
 
 
+@router.get("/{call_id}/recording-url")
+async def get_call_recording_url(
+    call_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the SAS URL for a call recording."""
+    logger = get_logger("api.calls")
+    logger.info(f"get_call_recording_url call_id={call_id} user={current_user.email}")
+
+    result = await db.execute(select(Call).where(Call.id == call_id))
+    call = result.scalar_one_or_none()
+    
+    if not call or not call.recording_url:
+        logger.warning(f"get_call_recording_url_not_found call_id={call_id}")
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    blob_service = BlobService()
+    
+    # 1. Try direct URL first (fastest)
+    plain_url = await blob_service.check_blob_exists(call.recording_url)
+    resolved_url = None
+
+    if plain_url:
+        resolved_url = blob_service.generate_sas_from_blob_url(plain_url)
+    
+    # 2. Fallback to robust search if not found
+    if not resolved_url:
+        call_sid = str(call.call_sid or "").strip()
+        match = re.search(r"(\d{10,13})$", call_sid)
+        if match:
+            raw = match.group(1)
+            ts = int(raw)
+             
+            tz = ZoneInfo("Asia/Kolkata")
+            dates = []
+            for dt in [call.started_at, call.ended_at, datetime.now(tz)]:
+                if dt:
+                    if getattr(dt, "tzinfo", None) is None:
+                        dt = dt.replace(tzinfo=tz)
+                    dates.append(dt.astimezone(tz).strftime("%Y-%m-%d"))
+             
+            unique_dates = list(dict.fromkeys(dates))
+            prefixes = [f"elevenlabs/{d}/" for d in unique_dates]
+            
+            found_blob = await asyncio.to_thread(
+                blob_service.find_latest_blob_name,
+                prefixes,
+                call_sid,
+                blob_service.container_name,
+            )
+            if found_blob:
+                resolved_url = blob_service.generate_sas_for_blob(blob_service.container_name, found_blob)
+
+    if not resolved_url:
+        logger.error(f"get_call_recording_url_failed call_id={call_id}")
+        raise HTTPException(status_code=404, detail="Recording not found in storage")
+
+    return {"recording_url": resolved_url}
+
+
 @router.get("/{call_id}/recording/stream")
 async def stream_call_recording(
     call_id: int,

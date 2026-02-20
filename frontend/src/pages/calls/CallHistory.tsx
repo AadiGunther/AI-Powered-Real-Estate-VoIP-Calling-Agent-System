@@ -74,23 +74,6 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
         }
     }, [user]);
 
-    useEffect(() => {
-        if (!autoplayPending || !recordingUrl) return;
-        const audioEl = audioRef.current;
-        if (!audioEl) return;
-
-        audioEl.play().catch(() => {
-            setRecordingError('Press play in the audio player to start playback.');
-        });
-        setAutoplayPending(false);
-    }, [autoplayPending, recordingUrl]);
-
-    const buildRecordingStreamUrl = (callId: number) => {
-        const token = localStorage.getItem('token');
-        const encodedToken = token ? encodeURIComponent(token) : '';
-        return `${api.defaults.baseURL}/calls/${callId}/recording/stream?token=${encodedToken}`;
-    };
-
     const fetchCalls = async () => {
         setLoading(true);
         setError(null);
@@ -122,41 +105,35 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
 
     const handleSelectCall = async (call: Call, opts?: { autoplay?: boolean }) => {
         const requestId = ++recordingRequestIdRef.current;
+
         setSelectedCall(call);
         setTranscript(null);
         setTranscriptError(null);
         setRecordingUrl(null);
         setRecordingError(null);
         setAutoplayPending(Boolean(opts?.autoplay));
-        setRecordingUrlLoadingFor(call.recording_url ? call.id : null);
-
-        if (call.recording_url) {
-            if (user?.role === 'admin') {
-                try {
-                    const response = await api.get<{ recording_url: string }>(
-                        `/calls/${call.id}/recording`,
-                        { skipAuthRedirect: true } as any,
-                    );
-                    if (recordingRequestIdRef.current !== requestId) return;
-                    setRecordingUrl(response.data.recording_url || null);
-                    setRecordingUrlLoadingFor(null);
-                    return;
-                } catch (err: any) {
-                    if (recordingRequestIdRef.current !== requestId) return;
-                    const message =
-                        err?.response?.data?.detail ||
-                        'Failed to load recording URL. Falling back to direct stream.';
-                    setRecordingError(message);
-                }
-            }
-            if (recordingRequestIdRef.current !== requestId) return;
-            setRecordingUrl(buildRecordingStreamUrl(call.id));
-            setRecordingUrlLoadingFor(null);
-            return;
-        }
         setRecordingUrlLoadingFor(null);
     };
 
+    const handlePlayRecording = async (call: Call, e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        setRecordingUrlLoadingFor(call.id);
+        try {
+            const response = await api.get<{ recording_url: string }>(`/calls/${call.id}/recording-url`);
+            if (response.data.recording_url) {
+                window.open(response.data.recording_url, '_blank');
+            } else {
+                alert("Recording URL not found");
+            }
+        } catch (err) {
+            console.error("Failed to get recording URL", err);
+            alert("Failed to open recording");
+        } finally {
+            setRecordingUrlLoadingFor(null);
+        }
+    };
+
+    // Transcript fetching
     const fetchTranscript = async (callId: number) => {
         setTranscriptLoading(true);
         setTranscriptError(null);
@@ -164,6 +141,7 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
             const response = await api.get<CallTranscript>(`/calls/${callId}/transcript`);
             setTranscript(response.data);
         } catch (err: any) {
+            console.error('Failed to fetch transcript:', err);
             const message =
                 err?.response?.data?.detail ||
                 'Transcript not available for this call.';
@@ -175,24 +153,9 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
     };
 
     const fetchRecordings = async () => {
-        setRecordingsLoading(true);
-        setRecordingsError(null);
-        try {
-            const params = new URLSearchParams({
-                page: '1',
-                page_size: '50',
-            });
-            const response = await api.get<CallListResponse>(`/calls/recordings?${params.toString()}`);
-            setRecordings(response.data.calls);
-        } catch (err: any) {
-            const message =
-                err?.response?.data?.detail ||
-                'Failed to load recordings. Please try again.';
-            setRecordingsError(message);
-            setRecordings([]);
-        } finally {
-            setRecordingsLoading(false);
-        }
+        // This function is no longer needed since we fetch recording URL on demand
+        // But keeping it as a placeholder if we need to bulk fetch recordings later
+        setRecordingsLoading(false);
     };
 
     const formatDate = (dateString: string) => {
@@ -222,10 +185,7 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
         if (call.reception_status === 'received' || call.reception_status === 'not_received') {
             return call.reception_status;
         }
-        if (call.status === 'completed' || call.answered_at || call.duration_seconds) {
-            return 'received';
-        }
-        return 'not_received';
+        return call.direction === 'inbound' && call.status === 'completed' ? 'received' : 'not_received';
     };
 
     const filteredCalls = calls.filter((call) => {
@@ -233,8 +193,6 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
         const receptionStatus = normalizeReceptionStatus(call);
         return receptionFilter === receptionStatus;
     });
-
-    const effectiveRecordingUrl = selectedCall ? recordingUrl || null : null;
 
     return (
         <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
@@ -286,11 +244,11 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
 
                 {selectedCall &&
                     recordingUrlLoadingFor === selectedCall.id &&
-                    !effectiveRecordingUrl && (
+                    (
                         <div className="loading">Loading recording...</div>
                     )}
 
-                {selectedCall && effectiveRecordingUrl && (
+                {selectedCall && selectedCall.recording_url && (
                     <div className="recording-player">
                         <div className="recording-player-header">
                             <span className="recording-player-title">
@@ -298,26 +256,20 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
                                 {selectedCall.caller_username ||
                                     `${selectedCall.from_number} → ${selectedCall.to_number}`}
                             </span>
+                        </div>
+                        
+                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginTop: '0.5rem' }}>
                             <button
                                 type="button"
-                                className="recording-download-link"
-                                onClick={() =>
-                                    downloadRecording(
-                                        effectiveRecordingUrl,
-                                        `recording-${selectedCall.call_sid || selectedCall.id}.mp3`,
-                                    )
-                                }
+                                className="btn btn-primary"
+                                onClick={() => handlePlayRecording(selectedCall)}
+                                disabled={recordingUrlLoadingFor === selectedCall.id}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                             >
-                                <Download size={16} />
-                                <span>Download</span>
+                                <PlayCircle size={16} />
+                                <span>{recordingUrlLoadingFor === selectedCall.id ? 'Opening...' : 'Open Recording in New Tab'}</span>
                             </button>
                         </div>
-                        <audio
-                            ref={audioRef}
-                            controls
-                            src={effectiveRecordingUrl}
-                            className="recording-audio"
-                        />
                     </div>
                 )}
 
@@ -403,10 +355,7 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ receptionFilter }) => 
                                                             type="button"
                                                             className="recording-icon-button"
                                                             onClick={(e) => {
-                                                                e.preventDefault();
-                                                                e.stopPropagation();
-                                                                (e.nativeEvent as any)?.stopImmediatePropagation?.();
-                                                                void handleSelectCall(call, { autoplay: true });
+                                                                handlePlayRecording(call, e);
                                                             }}
                                                             disabled={recordingUrlLoadingFor === call.id}
                                                         >

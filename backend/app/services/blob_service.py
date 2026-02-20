@@ -179,6 +179,41 @@ class BlobService:
             )
             return None
 
+    async def check_blob_exists(self, blob_url: str) -> Optional[str]:
+        """Check if a blob URL exists and return the clean URL if it does."""
+        if not blob_url:
+            return None
+            
+        cleaned = str(blob_url).strip().strip("`").strip().replace("`", "")
+        parsed = urlparse(cleaned)
+        path = parsed.path.lstrip("/")
+        if not path or "/" not in path:
+            return None
+            
+        container_name, blob_name = path.split("/", 1)
+        
+        if not self.client:
+            return None
+
+        def _check():
+            try:
+                # 1. Try as parsed
+                blob_client = self.client.get_blob_client(container=container_name, blob=blob_name)
+                if blob_client.exists():
+                    return cleaned
+                
+                # 2. Try with default container if different
+                if self.container_name and container_name != self.container_name:
+                    # Maybe the path is relative to default container?
+                    # But usually URL has container.
+                    # If the URL structure is different, we might need adjustments.
+                    pass
+            except Exception:
+                pass
+            return None
+
+        return await asyncio.to_thread(_check)
+
     def generate_sas_from_blob_url(self, blob_url: str, expiry_minutes: int = 15) -> Optional[str]:
         if not blob_url:
             logger.warning("blob_sas_missing_blob_url")
